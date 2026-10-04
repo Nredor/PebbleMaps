@@ -1,0 +1,79 @@
+{
+  "name": "pebble-maps",
+  "author": "Tom Bolger",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app",
+    "maps",
+    "navigation",
+    "google maps",
+    "directions"
+  ],
+  "private": true,
+  "dependencies": {
+    "tiny-inflate": "^1.0.3"
+  },
+  "pebble": {
+    "displayName": "Pebble Maps",
+    "uuid": "cce60bc9-e29f-4988-a83b-b4652291650d",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "capabilities": [
+      "location",
+      "configurable"
+    ],
+    "messageKeys": [
+      "cmd",
+      "seq",
+      "idx",
+      "mode",
+      "text",
+      "text2",
+      "text3",
+      "text4",
+      "num",
+      "num2",
+      "data",
+      "offset",
+      "width",
+      "height",
+      "fmt",
+      "stride",
+      "palette",
+      "total",
+      "list",
+      "flags",
+      "apiKey",
+      "defaultMode",
+      "units",
+      "favorites",
+      "avoidTolls",
+      "avoidHighways",
+      "avoidFerries",
+      "vibrate",
+      "allModeTimes",
+      "mapStyle"
+    ],
+    "resources": {
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true
+        }
+      ]
+    }
+  }
+}

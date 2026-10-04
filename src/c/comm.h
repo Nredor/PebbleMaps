@@ -1,0 +1,26 @@
+// Pebble Maps - phone communication
+#pragma once
+#include "common.h"
+
+typedef void (*CommHandler)(int cmd, DictionaryIterator *iter, void *ctx);
+
+void comm_init(void);
+// The visible screen registers to receive phone messages.
+void comm_set_handler(CommHandler handler, void *ctx);
+void comm_clear_handler(CommHandler handler);
+
+// Outgoing message. Fields set to -1 (or empty text) are not sent.
+typedef struct {
+  int cmd, idx, mode, seq, width, height, num;
+  char text[160];
+} OutMsg;
+
+void comm_msg_init(OutMsg *m, int cmd);
+void comm_send(const OutMsg *m);
+void comm_cmd(int cmd);
+void comm_cmd2(int cmd, int idx, int mode);
+
+// Tuple helpers
+int tuple_int(DictionaryIterator *it, uint32_t key, int def);
+const char *tuple_str(DictionaryIterator *it, uint32_t key);
+const Tuple *tuple_get(DictionaryIterator *it, uint32_t key);

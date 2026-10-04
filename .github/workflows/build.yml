@@ -1,0 +1,20 @@
+name: Build PBW
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Pebble SDK
+        run: |
+          uv tool install pebble-tool --python 3.13
+          yes | pebble sdk install latest
+      - name: Build
+        run: pebble build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pebblemaps-pbw
+          path: build/*.pbw

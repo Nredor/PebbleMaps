@@ -1,0 +1,398 @@
+// Pebble Maps - turn-by-turn navigation engine
+var P = require('./protocol');
+var geo = require('./geo');
+var fmt = require('./format');
+
+var MAN_MAP = {
+  TURN_SLIGHT_LEFT: P.MAN.SLIGHT_LEFT, TURN_SHARP_LEFT: P.MAN.SHARP_LEFT, UTURN_LEFT: P.MAN.UTURN_LEFT,
+  TURN_LEFT: P.MAN.LEFT, TURN_SLIGHT_RIGHT: P.MAN.SLIGHT_RIGHT, TURN_SHARP_RIGHT: P.MAN.SHARP_RIGHT,
+  UTURN_RIGHT: P.MAN.UTURN_RIGHT, TURN_RIGHT: P.MAN.RIGHT, STRAIGHT: P.MAN.STRAIGHT,
+  RAMP_LEFT: P.MAN.RAMP_LEFT, RAMP_RIGHT: P.MAN.RAMP_RIGHT, MERGE: P.MAN.MERGE,
+  FORK_LEFT: P.MAN.FORK_LEFT, FORK_RIGHT: P.MAN.FORK_RIGHT, FERRY: P.MAN.FERRY,
+  FERRY_TRAIN: P.MAN.FERRY, ROUNDABOUT_LEFT: P.MAN.ROUNDABOUT_LEFT,
+  ROUNDABOUT_RIGHT: P.MAN.ROUNDABOUT_RIGHT, DEPART: P.MAN.DEPART, NAME_CHANGE: P.MAN.STRAIGHT
+};
+
+function vehicleIcon(type) {
+  type = type || '';
+  if (/BUS|TROLLEY|SHARE_TAXI/.test(type)) return P.MAN.BUS;
+  if (/SUBWAY|METRO/.test(type)) return P.MAN.SUBWAY;
+  if (/TRAM|LIGHT_RAIL|MONORAIL|CABLE|FUNICULAR|GONDOLA/.test(type)) return P.MAN.TRAM;
+  if (/FERRY/.test(type)) return P.MAN.FERRY;
+  if (/RAIL|TRAIN/.test(type)) return P.MAN.TRAIN;
+  return P.MAN.BUS;
+}
+
+function transitInfo(td) {
+  if (!td) return null;
+  var line = td.transitLine || {};
+  var veh = line.vehicle || {};
+  var stops = td.stopDetails || {};
+  var lv = td.localizedValues || {};
+  var lineName = line.nameShort || line.name || (veh.name && veh.name.text) || 'transit';
+  var vehName = (veh.name && veh.name.text) || '';
+  return {
+    line: lineName,
+    vehicle: vehName,
+    icon: vehicleIcon(veh.type),
+    headsign: td.headsign || '',
+    stops: td.stopCount || 0,
+    from: (stops.departureStop && stops.departureStop.name) || '',
+    to: (stops.arrivalStop && stops.arrivalStop.name) || '',
+    departs: (lv.departureTime && lv.departureTime.time && lv.departureTime.time.text) || '',
+    arrives: (lv.arrivalTime && lv.arrivalTime.time && lv.arrivalTime.time.text) || ''
+  };
+}
+
+// Turn a Routes API route into our navigation model
+function buildRoute(r, mode, dest) {
+  var points = [];
+  var steps = [];
+  var legs = r.legs || [];
+  legs.forEach(function (leg) {
+    (leg.steps || []).forEach(function (st) {
+      var pts = geo.decodePolyline(st.polyline && st.polyline.encodedPolyline);
+      if (!pts.length && st.startLocation && st.endLocation) {
+        pts = [[st.startLocation.latLng.latitude, st.startLocation.latLng.longitude],
+               [st.endLocation.latLng.latitude, st.endLocation.latLng.longitude]];
+      }
+      var startIdx = points.length ? points.length - 1 : 0;
+      for (var i = 0; i < pts.length; i++) {
+        if (points.length && i === 0) {
+          var last = points[points.length - 1];
+          if (Math.abs(last[0] - pts[0][0]) < 1e-6 && Math.abs(last[1] - pts[0][1]) < 1e-6) continue;
+        }
+        points.push(pts[i]);
+      }
+      var ni = st.navigationInstruction || {};
+      var tr = transitInfo(st.transitDetails);
+      var instr = ni.instructions || '';
+      var man = MAN_MAP[ni.maneuver] !== undefined ? MAN_MAP[ni.maneuver] : P.MAN.STRAIGHT;
+      if (tr) {
+        man = tr.icon;
+        instr = 'Take ' + tr.line + (tr.headsign ? ' toward ' + tr.headsign : '');
+      }
+      steps.push({
+        instruction: instr || 'Continue',
+        man: man,
+        startIdx: startIdx,
+        endIdx: points.length - 1,
+        meters: st.distanceMeters || 0,
+        seconds: fmt.seconds(st.staticDuration),
+        travelMode: st.travelMode || '',
+        transit: tr
+      });
+    });
+  });
+  if (!points.length && r.polyline) points = geo.decodePolyline(r.polyline.encodedPolyline);
+  // cumulative distances along the line
+  var cum = [0];
+  for (var i = 1; i < points.length; i++) cum.push(cum[i - 1] + geo.haversine(points[i - 1], points[i]));
+  steps.forEach(function (s) {
+    s.startDist = cum[s.startIdx] || 0;
+    s.endDist = cum[s.endIdx] || 0;
+  });
+  var staticSum = steps.reduce(function (a, s) { return a + s.seconds; }, 0);
+  var dur = fmt.seconds(r.duration);
+  return {
+    mode: mode,
+    dest: dest,
+    points: points,
+    cum: cum,
+    steps: steps,
+    total: cum[cum.length - 1] || r.distanceMeters || 0,
+    duration: dur,
+    staticDuration: fmt.seconds(r.staticDuration) || staticSum,
+    factor: staticSum > 0 && dur > 0 ? dur / staticSum : 1,
+    description: r.description || '',
+    hasTolls: !!(r.travelAdvisory && r.travelAdvisory.tollInfo),
+    warnings: r.warnings || [],
+    distanceMeters: r.distanceMeters || 0
+  };
+}
+
+function stepList(route, imperial) {
+  return route.steps.map(function (s, i) {
+    var sub = fmt.distance(s.meters || (s.endDist - s.startDist), imperial);
+    if (s.transit) {
+      sub = (s.transit.departs ? s.transit.departs + ' · ' : '') + s.transit.stops + ' stops';
+      return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 58), sub: sub, icon: s.man };
+    }
+    return { title: fmt.clip(s.instruction, 58), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
+  });
+}
+
+// --- Navigator --------------------------------------------------------------
+var THRESH = {
+  0: { soon: 450, now: 80, off: 60 },   // drive
+  1: { soon: 60, now: 15, off: 35 },    // walk
+  2: { soon: 150, now: 30, off: 40 },   // bike
+  3: { soon: 60, now: 15, off: 45 }     // transit (walking parts)
+};
+
+function Navigator(opts) {
+  this.route = opts.route;
+  this.view = opts.view;             // {w, h} of the watch drawing area
+  this.settings = opts.settings;
+  this.send = opts.send;             // function(dict)
+  this.reroute = opts.reroute;       // function(position, cb(err, route))
+  this.onArrive = opts.onArrive;
+  this.lastIdx = 0;
+  this.offCount = 0;
+  this.alerts = {};
+  this.lastSent = 0;
+  this.lastKey = '';
+  this.rerouting = false;
+  this.lastReroute = 0;
+  this.arrived = false;
+  this.lastFix = 0;
+  this.heading = null;
+}
+
+Navigator.prototype.setRoute = function (route) {
+  this.route = route;
+  this.lastIdx = 0;
+  this.offCount = 0;
+  this.alerts = {};
+  this.rerouting = false;
+};
+
+// Snap position (lat,lng) to the route. Returns {idx, t, s, off}
+Navigator.prototype.snap = function (pos) {
+  var pts = this.route.points;
+  if (pts.length < 2) return { idx: 0, t: 0, s: 0, off: 0 };
+  var best = null;
+  var self = this;
+  function scan(from, to) {
+    for (var i = Math.max(0, from); i < Math.min(pts.length - 1, to); i++) {
+      var a = geo.toLocal(pos, pts[i]);
+      var b = geo.toLocal(pos, pts[i + 1]);
+      var dx = b[0] - a[0], dy = b[1] - a[1];
+      var len2 = dx * dx + dy * dy;
+      var t = len2 > 0 ? Math.max(0, Math.min(1, -(a[0] * dx + a[1] * dy) / len2)) : 0;
+      var px = a[0] + t * dx, py = a[1] + t * dy;
+      var d = Math.sqrt(px * px + py * py);
+      // slight preference for staying near the last position
+      var penalty = i < self.lastIdx ? (self.lastIdx - i) * 2 : 0;
+      if (!best || d + penalty < best.score) {
+        best = { idx: i, t: t, off: d, score: d + penalty };
+      }
+    }
+  }
+  scan(this.lastIdx - 8, this.lastIdx + 80);
+  if (!best || best.off > 80) scan(0, pts.length);
+  var segLen = this.route.cum[best.idx + 1] - this.route.cum[best.idx];
+  best.s = this.route.cum[best.idx] + best.t * segLen;
+  return best;
+};
+
+Navigator.prototype.stepAt = function (s) {
+  var steps = this.route.steps;
+  for (var k = 0; k < steps.length; k++) {
+    if (steps[k].endDist > s + 3) return k;
+  }
+  return steps.length - 1;
+};
+
+Navigator.prototype.remainingSeconds = function (k, s) {
+  var steps = this.route.steps;
+  var sec = 0;
+  for (var i = k + 1; i < steps.length; i++) sec += steps[i].seconds;
+  var st = steps[k];
+  if (st) {
+    var len = Math.max(1, st.endDist - st.startDist);
+    sec += st.seconds * Math.max(0, Math.min(1, (st.endDist - s) / len));
+  }
+  return sec * (this.route.factor || 1);
+};
+
+// Route points ahead of the snapped position, rotated heading-up, in pixels
+Navigator.prototype.vectorPoints = function (snap, distToMan) {
+  var r = this.route;
+  var mode = r.mode;
+  var h = this.view.h || 60;
+  var minM = mode === P.MODE.DRIVE ? 1.6 : 0.6;
+  var maxM = mode === P.MODE.DRIVE ? 14 : 3.5;
+  var mpp = Math.max(minM, Math.min(maxM, (distToMan * 1.15) / (h * 0.62)));
+  this.mpp = mpp;
+  var origin = this.snappedPoint(snap);
+  // heading: direction of the route a little ahead
+  var aheadIdx = snap.idx + 1;
+  while (aheadIdx < r.points.length - 1 && r.cum[aheadIdx] - snap.s < 15) aheadIdx++;
+  var target = r.points[Math.min(aheadIdx, r.points.length - 1)];
+  var hdg = geo.bearing(origin, target);
+  if (this.heading === null) this.heading = hdg;
+  else {
+    var diff = ((hdg - this.heading + 540) % 360) - 180;
+    this.heading = (this.heading + diff * 0.6 + 360) % 360;
+  }
+  var th = geo.rad(this.heading);
+  var sin = Math.sin(th), cos = Math.cos(th);
+  var maxDist = (h * 1.2 + (this.view.w || 144)) * mpp;
+  var out = [[0, 0]];
+  var destVisible = false;
+  for (var i = snap.idx + 1; i < r.points.length && out.length < 60; i++) {
+    var d = geo.toLocal(origin, r.points[i]);
+    var f = d[0] * sin + d[1] * cos;       // forward
+    var rt = d[0] * cos - d[1] * sin;      // right
+    var x = Math.round(rt / mpp), y = Math.round(-f / mpp);
+    x = Math.max(-1500, Math.min(1500, x));
+    y = Math.max(-1500, Math.min(1500, y));
+    var prev = out[out.length - 1];
+    if (Math.abs(prev[0] - x) + Math.abs(prev[1] - y) < 2 && i < r.points.length - 1) continue;
+    out.push([x, y]);
+    if (i === r.points.length - 1) destVisible = true;
+    if (r.cum[i] - snap.s > maxDist) break;
+  }
+  return { pts: out, destVisible: destVisible };
+};
+
+Navigator.prototype.snappedPoint = function (snap) {
+  var a = this.route.points[snap.idx], b = this.route.points[Math.min(snap.idx + 1, this.route.points.length - 1)];
+  return [a[0] + (b[0] - a[0]) * snap.t, a[1] + (b[1] - a[1]) * snap.t];
+};
+
+Navigator.prototype.update = function (pos, accuracy) {
+  if (this.arrived) return;
+  var now = Date.now();
+  this.lastFix = now;
+  var r = this.route;
+  var th = THRESH[r.mode] || THRESH[0];
+  var snap = this.snap(pos);
+  var k = this.stepAt(snap.s);
+  var step = r.steps[k];
+  var flags = 0;
+  var self = this;
+
+  // --- off route?
+  var riding = step && step.transit;
+  var offLimit = th.off + Math.min(50, accuracy || 20) * 0.6;
+  if (!riding && snap.off > offLimit) this.offCount++;
+  else this.offCount = 0;
+  if (this.offCount >= 3 && !this.rerouting && now - this.lastReroute > 15000) {
+    this.rerouting = true;
+    this.lastReroute = now;
+    this.reroute(pos, function (err, route) {
+      self.rerouting = false;
+      if (!err && route) {
+        self.setRoute(route);
+        self.send({ cmd: P.CMD.TOAST, text: 'New route' });
+      }
+    });
+  }
+  if (this.rerouting) flags |= P.NAV_FLAG.REROUTING;
+  if (snap.off < offLimit) this.lastIdx = snap.idx;
+
+  // --- arrived?
+  var toEnd = r.total - snap.s;
+  var destDist = r.dest ? geo.haversine(pos, [r.dest.lat, r.dest.lng]) : toEnd;
+  if ((toEnd < (r.mode === P.MODE.DRIVE ? 35 : 18) && snap.off < 60) || destDist < (r.mode === P.MODE.DRIVE ? 30 : 15)) {
+    this.arrived = true;
+    this.send({
+      cmd: P.CMD.NAV, text: (r.dest && r.dest.name) || 'Destination', text2: '', text3: '', text4: '',
+      num: P.MAN.ARRIVE, idx: P.MAN.NONE, num2: Math.round(now / 1000), flags: P.NAV_FLAG.ARRIVED
+    });
+    if (this.onArrive) this.onArrive();
+    return;
+  }
+
+  // --- what to show
+  var imperial = this.settings.imperial;
+  var text, man, distM, detail = '', alertKey;
+  var next = r.steps[k + 1];
+  if (step && step.transit) {
+    var t = step.transit;
+    distM = step.endDist - snap.s;
+    man = t.icon;
+    text = 'Ride ' + t.line + ' · get off at ' + (t.to || 'your stop');
+    detail = t.stops + ' stops' + (t.arrives ? ' · arrive ' + t.arrives : '');
+    flags |= P.NAV_FLAG.TRANSIT;
+    alertKey = 'exit' + k;
+  } else if (k === 0 && snap.s < 25 && step) {
+    distM = step.endDist - snap.s;
+    man = P.MAN.DEPART;
+    text = step.instruction;
+    alertKey = 'start';
+  } else if (next) {
+    distM = step.endDist - snap.s;
+    man = next.man;
+    text = next.instruction;
+    if (next.transit) {
+      var nt = next.transit;
+      text = 'Board ' + nt.line + (nt.headsign ? ' toward ' + nt.headsign : '') + ' at ' + (nt.from || 'the stop');
+      detail = nt.departs ? 'Departs ' + nt.departs : '';
+      flags |= P.NAV_FLAG.TRANSIT;
+    }
+    alertKey = 'step' + (k + 1);
+  } else {
+    distM = toEnd;
+    man = P.MAN.ARRIVE;
+    text = 'Arrive at ' + ((r.dest && r.dest.name) || 'destination');
+    alertKey = 'arrive';
+  }
+  distM = Math.max(0, distM);
+
+  // "Then" chip: next maneuver comes quickly after this one
+  var thenMan = P.MAN.NONE;
+  if (next && !(step && step.transit)) {
+    var after = r.steps[k + 2];
+    var nextLen = next.endDist - next.startDist;
+    if (nextLen < (r.mode === P.MODE.DRIVE ? 200 : 60)) thenMan = after ? after.man : P.MAN.ARRIVE;
+  }
+
+  // alerts
+  if (!this.alerts[alertKey]) this.alerts[alertKey] = {};
+  var al = this.alerts[alertKey];
+  var soonAt = step && step.transit ? 700 : th.soon;
+  var nowAt = step && step.transit ? 200 : th.now;
+  if (distM <= nowAt && !al.now) {
+    al.now = al.soon = true;
+    flags |= P.NAV_FLAG.ALERT_NOW;
+  } else if (distM <= soonAt && !al.soon && (step ? step.endDist - step.startDist : 0) > soonAt * 1.3) {
+    al.soon = true;
+    flags |= P.NAV_FLAG.ALERT_SOON;
+  }
+
+  var remain = this.remainingSeconds(k, snap.s);
+  var vec = this.vectorPoints(snap, distM);
+  if (vec.destVisible) flags |= P.NAV_FLAG.DEST_VISIBLE;
+  var data = [];
+  vec.pts.forEach(function (p) {
+    var x = p[0] & 0xffff, y = p[1] & 0xffff;
+    data.push(x & 0xff, (x >> 8) & 0xff, y & 0xff, (y >> 8) & 0xff);
+  });
+
+  var dict = {
+    cmd: P.CMD.NAV,
+    text: fmt.clip(text, 110),
+    text2: fmt.distance(distM, imperial, true),
+    text3: fmt.duration(remain) + ' · ' + fmt.distance(toEnd, imperial),
+    text4: fmt.clip(detail, 60),
+    num: man,
+    idx: thenMan,
+    num2: Math.round((now + remain * 1000) / 1000),
+    flags: flags,
+    data: data
+  };
+  var key = [k, man, dict.text2, flags & ~P.NAV_FLAG.DEST_VISIBLE].join('|');
+  var important = (flags & (P.NAV_FLAG.ALERT_NOW | P.NAV_FLAG.ALERT_SOON)) || key.split('|')[0] !== this.lastKey.split('|')[0];
+  if (important || now - this.lastSent > 1500) {
+    this.lastSent = now;
+    this.lastKey = key;
+    this.send(dict);
+  }
+};
+
+Navigator.prototype.noGps = function () {
+  this.send({
+    cmd: P.CMD.NAV, text: 'Waiting for GPS…', text2: '', text3: '', text4: '',
+    num: P.MAN.DEPART, idx: P.MAN.NONE, num2: 0, flags: P.NAV_FLAG.NO_GPS
+  });
+};
+
+module.exports = {
+  buildRoute: buildRoute,
+  stepList: stepList,
+  Navigator: Navigator,
+  transitInfo: transitInfo
+};

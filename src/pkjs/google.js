@@ -1,0 +1,409 @@
+// Pebble Maps - Google Maps Platform calls (all with the user's own API key)
+//
+// APIs used (the user enables these in Google Cloud):
+//   Maps Static API      - map pictures
+//   Places API (New)     - search and nearby places
+//   Routes API           - directions and travel times
+//   Geocoding API        - addresses <-> coordinates
+
+var P = require('./protocol');
+
+var config = {
+  key: '',
+  base: null,        // test override: 'http://127.0.0.1:8765'
+  language: 'en'
+};
+
+function setKey(key) {
+  key = String(key || '').trim();
+  if (key.indexOf('test:') === 0) {
+    config.base = key.substr(5);
+    config.key = 'TEST';
+  } else {
+    config.base = null;
+    config.key = key;
+  }
+}
+
+function hasKey() { return !!config.key; }
+function isTest() { return !!config.base; }
+
+function url(service, path) {
+  if (config.base) return config.base + '/' + service + path;
+  var hosts = {
+    places: 'https://places.googleapis.com',
+    routes: 'https://routes.googleapis.com',
+    maps: 'https://maps.googleapis.com'
+  };
+  return hosts[service] + path;
+}
+
+// Turn a Google error into plain language a non-technical user can act on
+function friendlyError(status, body, apiName) {
+  var msg = '';
+  var reason = '';
+  try {
+    var j = typeof body === 'string' ? JSON.parse(body) : body;
+    if (j && j.error) {
+      msg = j.error.message || '';
+      reason = j.error.status || '';
+      (j.error.details || []).forEach(function (d) { if (d.reason) reason += ' ' + d.reason; });
+    } else if (j && j.error_message) {
+      msg = j.error_message;
+      reason = j.status || '';
+    }
+  } catch (e) {
+    msg = String(body || '').substr(0, 300);
+  }
+  var all = (msg + ' ' + reason).toLowerCase();
+  if (status === 0) {
+    return { code: P.ERR.NETWORK, title: 'No connection', text: 'Your phone couldn\'t reach Google. Check its internet connection and try again.' };
+  }
+  if (all.indexOf('api key not valid') >= 0 || all.indexOf('api_key_invalid') >= 0 || all.indexOf('provided api key is invalid') >= 0) {
+    return { code: P.ERR.NO_KEY, title: 'Key not valid', text: 'Google says your Maps key isn\'t valid. Open Pebble Maps Settings on your phone and paste the key again.' };
+  }
+  if (all.indexOf('billing') >= 0) {
+    return { code: P.ERR.API, title: 'Billing needed', text: 'Google needs billing turned on for your project (it stays free for normal use). See step 3 in Settings on your phone.' };
+  }
+  if (all.indexOf('not been used') >= 0 || all.indexOf('is disabled') >= 0 || all.indexOf('service_disabled') >= 0 ||
+      all.indexOf('not authorized to use this api') >= 0 || all.indexOf('api_key_service_blocked') >= 0 ||
+      all.indexOf('not activated') >= 0 || all.indexOf('this api project is not authorized') >= 0) {
+    return { code: P.ERR.API, title: apiName + ' is off', text: 'Your key can\'t use the ' + apiName + ' yet. In Settings on your phone, do step 4 again (turn on the map services) and check step 5.' };
+  }
+  if (all.indexOf('referer') >= 0 || all.indexOf('referrer') >= 0 || all.indexOf('api_key_android_app_blocked') >= 0 ||
+      all.indexOf('api_key_ios_app_blocked') >= 0 || all.indexOf('ip address') >= 0) {
+    return { code: P.ERR.API, title: 'Key is restricted', text: 'Your key only works on certain websites or apps. In Google Cloud, set "Application restrictions" to None (Settings step 5).' };
+  }
+  if (status === 429 || all.indexOf('quota') >= 0 || all.indexOf('rate') >= 0) {
+    return { code: P.ERR.API, title: 'Too many requests', text: 'Google\'s daily limit for your key was reached. Try again later.' };
+  }
+  return { code: P.ERR.API, title: 'Google error', text: (apiName ? apiName + ': ' : '') + (msg || ('error ' + status)).substr(0, 180) };
+}
+
+function request(opts, cb) {
+  var xhr = new XMLHttpRequest();
+  var done = false;
+  var timer = setTimeout(function () {
+    if (done) return;
+    done = true;
+    try { xhr.abort(); } catch (e) { /* ignore */ }
+    cb({ status: 0, body: 'timeout' });
+  }, opts.timeout || 20000);
+  xhr.open(opts.method || 'GET', opts.url, true);
+  var headers = opts.headers || {};
+  Object.keys(headers).forEach(function (h) { xhr.setRequestHeader(h, headers[h]); });
+  if (opts.binary) {
+    if (opts.binary === 'text') xhr.overrideMimeType('text/plain; charset=x-user-defined');
+    else xhr.responseType = 'arraybuffer';
+  }
+  xhr.onload = function () {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    var body;
+    if (opts.binary === 'arraybuffer' || (opts.binary && opts.binary !== 'text')) body = xhr.response;
+    else body = xhr.responseText;
+    if (xhr.status >= 200 && xhr.status < 300) cb(null, body, xhr);
+    else {
+      var text = body;
+      if (opts.binary && typeof body !== 'string') {
+        try { text = String.fromCharCode.apply(null, new Uint8Array(body).subarray(0, 600)); } catch (e) { text = ''; }
+      }
+      cb({ status: xhr.status, body: text });
+    }
+  };
+  xhr.onerror = function () {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    cb({ status: 0, body: 'network error' });
+  };
+  xhr.send(opts.body || null);
+}
+
+function postJSON(service, path, fieldMask, body, apiName, cb) {
+  request({
+    method: 'POST',
+    url: url(service, path),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': config.key,
+      'X-Goog-FieldMask': fieldMask
+    },
+    body: JSON.stringify(body)
+  }, function (err, text) {
+    if (err) return cb(friendlyError(err.status, err.body, apiName));
+    var j;
+    try { j = JSON.parse(text); } catch (e) { return cb(friendlyError(500, 'Bad response from Google', apiName)); }
+    cb(null, j);
+  });
+}
+
+function getJSON(service, path, apiName, cb) {
+  request({ url: url(service, path) }, function (err, text) {
+    if (err) return cb(friendlyError(err.status, err.body, apiName));
+    var j;
+    try { j = JSON.parse(text); } catch (e) { return cb(friendlyError(500, 'Bad response', apiName)); }
+    if (j.status && j.status !== 'OK' && j.status !== 'ZERO_RESULTS') {
+      return cb(friendlyError(403, j, apiName));
+    }
+    cb(null, j);
+  });
+}
+
+// Binary GET with a fallback for phone apps without arraybuffer support
+function getBinary(u, cb) {
+  request({ url: u, binary: 'arraybuffer', timeout: 25000 }, function (err, body) {
+    if (!err && body && typeof body !== 'string' && body.byteLength !== undefined) {
+      return cb(null, new Uint8Array(body));
+    }
+    if (err && err.status !== 200) return cb(err);
+    request({ url: u, binary: 'text', timeout: 25000 }, function (err2, text) {
+      if (err2) return cb(err2);
+      var out = new Uint8Array(text.length);
+      for (var i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+      cb(null, out);
+    });
+  });
+}
+
+// --- Places API (New) -----------------------------------------------------
+var PLACE_FIELDS = 'places.id,places.displayName,places.formattedAddress,places.shortFormattedAddress,' +
+  'places.location,places.primaryTypeDisplayName';
+
+function placeFrom(p) {
+  return {
+    name: (p.displayName && p.displayName.text) || 'Unnamed place',
+    address: p.shortFormattedAddress || p.formattedAddress || '',
+    fullAddress: p.formattedAddress || '',
+    lat: p.location && p.location.latitude,
+    lng: p.location && p.location.longitude,
+    placeId: p.id,
+    type: (p.primaryTypeDisplayName && p.primaryTypeDisplayName.text) || ''
+  };
+}
+
+function searchText(query, loc, cb) {
+  var body = { textQuery: query, pageSize: 10, languageCode: config.language };
+  if (loc) {
+    body.locationBias = { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: 40000 } };
+  }
+  function done(err, j) {
+    if (err) return cb(err);
+    cb(null, (j.places || []).map(placeFrom).filter(function (p) { return p.lat !== undefined; }));
+  }
+  postJSON('places', '/v1/places:searchText', PLACE_FIELDS, body, 'Places API', function (err, j) {
+    // Older/newer API versions name the result limit differently; retry once without it.
+    if (err && /pageSize|unknown name|invalid json payload/i.test(err.text || '')) {
+      delete body.pageSize;
+      body.maxResultCount = 10;
+      return postJSON('places', '/v1/places:searchText', PLACE_FIELDS, body, 'Places API', done);
+    }
+    done(err, j);
+  });
+}
+
+function searchNearby(category, loc, cb) {
+  var body = {
+    includedTypes: category.types,
+    maxResultCount: 10,
+    rankPreference: category.rank,
+    languageCode: config.language,
+    locationRestriction: { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: category.radius } }
+  };
+  postJSON('places', '/v1/places:searchNearby', PLACE_FIELDS, body, 'Places API', function (err, j) {
+    if (err) return cb(err);
+    cb(null, (j.places || []).map(placeFrom).filter(function (p) { return p.lat !== undefined; }));
+  });
+}
+
+// --- Geocoding API --------------------------------------------------------
+function geocode(address, cb) {
+  getJSON('maps', '/maps/api/geocode/json?address=' + encodeURIComponent(address) +
+    '&key=' + encodeURIComponent(config.key), 'Geocoding API', function (err, j) {
+    if (err) return cb(err);
+    var r = (j.results || [])[0];
+    if (!r) return cb(null, null);
+    cb(null, {
+      lat: r.geometry.location.lat, lng: r.geometry.location.lng,
+      address: r.formatted_address, placeId: r.place_id
+    });
+  });
+}
+
+function reverseGeocode(loc, cb) {
+  getJSON('maps', '/maps/api/geocode/json?latlng=' + loc[0] + ',' + loc[1] +
+    '&key=' + encodeURIComponent(config.key), 'Geocoding API', function (err, j) {
+    if (err) return cb(err);
+    var r = (j.results || [])[0];
+    cb(null, r ? { address: r.formatted_address, placeId: r.place_id } : null);
+  });
+}
+
+// --- Routes API -----------------------------------------------------------
+var ROUTE_FIELDS_FULL = [
+  'routes.duration', 'routes.staticDuration', 'routes.distanceMeters', 'routes.description',
+  'routes.polyline.encodedPolyline', 'routes.travelAdvisory.tollInfo', 'routes.warnings',
+  'routes.legs.steps.distanceMeters', 'routes.legs.steps.staticDuration',
+  'routes.legs.steps.polyline.encodedPolyline', 'routes.legs.steps.navigationInstruction',
+  'routes.legs.steps.travelMode', 'routes.legs.steps.transitDetails',
+  'routes.legs.steps.startLocation', 'routes.legs.steps.endLocation'
+].join(',');
+var ROUTE_FIELDS_SUMMARY = 'routes.duration,routes.distanceMeters';
+
+function waypoint(p) {
+  if (p.placeId && p.placeId.indexOf('ChIJ') === 0 && !p.lat) return { placeId: p.placeId };
+  return { location: { latLng: { latitude: p.lat, longitude: p.lng } } };
+}
+
+function computeRoute(origin, dest, mode, prefs, full, cb) {
+  var body = {
+    origin: waypoint({ lat: origin[0], lng: origin[1] }),
+    destination: waypoint(dest),
+    travelMode: P.ROUTES_MODE[mode],
+    languageCode: config.language,
+    units: prefs.imperial ? 'IMPERIAL' : 'METRIC'
+  };
+  if (mode === P.MODE.DRIVE) {
+    body.routingPreference = 'TRAFFIC_AWARE';
+    body.routeModifiers = {
+      avoidTolls: !!prefs.avoidTolls,
+      avoidHighways: !!prefs.avoidHighways,
+      avoidFerries: !!prefs.avoidFerries
+    };
+  }
+  if (mode === P.MODE.TRANSIT) {
+    body.departureTime = new Date(Date.now() + 60000).toISOString();
+  }
+  postJSON('routes', '/directions/v2:computeRoutes', full ? ROUTE_FIELDS_FULL : ROUTE_FIELDS_SUMMARY, body,
+    'Routes API', function (err, j) {
+      if (err) return cb(err);
+      var r = (j.routes || [])[0];
+      if (!r) return cb({ code: P.ERR.NO_RESULTS, title: 'No route', text: 'Google couldn\'t find a ' + P.MODE_NAMES[mode].toLowerCase() + ' route there.' });
+      cb(null, r);
+    });
+}
+
+// --- Maps Static API ------------------------------------------------------
+var STYLES = {
+  light: [
+    'element:geometry|color:0xffffff',
+    'element:labels.icon|visibility:off',
+    'element:labels.text.fill|color:0x555555',
+    'element:labels.text.stroke|color:0xffffff|weight:2',
+    'feature:poi|element:labels|visibility:off',
+    'feature:poi.park|element:geometry|color:0xaaffaa',
+    'feature:poi.park|element:labels.text|visibility:on',
+    'feature:poi.park|element:labels.text.fill|color:0x005500',
+    'feature:water|element:geometry|color:0x55aaff',
+    'feature:water|element:labels.text.fill|color:0x0055aa',
+    'feature:road|element:geometry.stroke|visibility:off',
+    'feature:road.local|element:geometry.fill|color:0xaaaaaa',
+    'feature:road.arterial|element:geometry.fill|color:0xaaaaaa',
+    'feature:road.highway|element:geometry.fill|color:0xffaa00',
+    'feature:road.highway|element:labels.text.fill|color:0x555555',
+    'feature:transit|visibility:off',
+    'feature:administrative|element:geometry|visibility:off',
+    'feature:administrative.locality|element:labels.text.fill|color:0x000000'
+  ],
+  dark: [
+    'element:geometry|color:0x000055',
+    'element:labels.icon|visibility:off',
+    'element:labels.text.fill|color:0xaaaaaa',
+    'element:labels.text.stroke|color:0x000055|weight:2',
+    'feature:poi|element:labels|visibility:off',
+    'feature:poi.park|element:geometry|color:0x005500',
+    'feature:water|element:geometry|color:0x0000aa',
+    'feature:road|element:geometry.stroke|visibility:off',
+    'feature:road.local|element:geometry.fill|color:0x555555',
+    'feature:road.arterial|element:geometry.fill|color:0x555555',
+    'feature:road.highway|element:geometry.fill|color:0xaa5500',
+    'feature:transit|visibility:off',
+    'feature:administrative|element:geometry|visibility:off',
+    'feature:administrative.locality|element:labels.text.fill|color:0xffffff'
+  ],
+  bw: [
+    'element:geometry|color:0xffffff',
+    'element:labels.icon|visibility:off',
+    'element:labels.text.fill|color:0x000000',
+    'element:labels.text.stroke|color:0xffffff|weight:3',
+    'feature:poi|element:labels|visibility:off',
+    'feature:poi.park|element:geometry|color:0xd8d8d8',
+    'feature:water|element:geometry|color:0x909090',
+    'feature:road|element:geometry.stroke|visibility:off',
+    'feature:road.local|element:geometry.fill|color:0x000000|weight:1',
+    'feature:road.arterial|element:geometry.fill|color:0x000000',
+    'feature:road.highway|element:geometry.fill|color:0x000000',
+    'feature:transit|visibility:off',
+    'feature:administrative|element:geometry|visibility:off'
+  ]
+};
+
+// opts: { center:[lat,lng], zoom, w, h, style:'light'|'dark'|'bw', path:[[lat,lng]...] }
+function staticMapUrl(opts) {
+  var q = [
+    'center=' + opts.center[0].toFixed(6) + ',' + opts.center[1].toFixed(6),
+    'zoom=' + opts.zoom,
+    'size=' + opts.w + 'x' + opts.h,
+    'scale=1',
+    'format=png',
+    'maptype=roadmap',
+    'language=' + config.language
+  ];
+  (STYLES[opts.style] || STYLES.light).forEach(function (s) { q.push('style=' + encodeURIComponent(s)); });
+  if (opts.path && opts.path.length > 1) {
+    var color = opts.style === 'bw' ? '0x000000ff' : (opts.style === 'dark' ? '0x55aaffff' : '0x0055ffff');
+    var geo = require('./geo');
+    var pts = opts.path;
+    var enc = geo.encodePolyline(pts);
+    var maxPts = 400;
+    while (enc.length > 6000 && maxPts > 20) {
+      enc = geo.encodePolyline(geo.thin(pts, maxPts));
+      maxPts = Math.floor(maxPts * 0.7);
+    }
+    q.push('path=' + encodeURIComponent('color:' + color + '|weight:' + (opts.style === 'bw' ? 4 : 5) + '|enc:' + enc));
+  }
+  q.push('key=' + encodeURIComponent(config.key));
+  return url('maps', '/maps/api/staticmap?' + q.join('&'));
+}
+
+function staticMap(opts, cb) {
+  getBinary(staticMapUrl(opts), function (err, bytes) {
+    if (err) return cb(friendlyError(err.status, err.body, 'Maps Static API'));
+    cb(null, bytes);
+  });
+}
+
+// Check every service the key needs. cb(results) with {name, ok, error}
+function checkKey(loc, cb) {
+  loc = loc || [40.7580, -73.9855];
+  var results = [];
+  var pending = 4;
+  function done(name, err) {
+    results.push({ name: name, ok: !err, error: err });
+    if (--pending === 0) cb(results);
+  }
+  staticMap({ center: loc, zoom: 14, w: 64, h: 64, style: 'light' }, function (err) { done('Maps Static API', err); });
+  searchText('coffee', loc, function (err) { done('Places API', err); });
+  computeRoute(loc, { lat: loc[0] + 0.01, lng: loc[1] + 0.01 }, P.MODE.WALK, {}, false, function (err) {
+    // "no route" still means the API answered
+    done('Routes API', err && err.code !== P.ERR.NO_RESULTS ? err : null);
+  });
+  reverseGeocode(loc, function (err) { done('Geocoding API', err); });
+}
+
+module.exports = {
+  setKey: setKey,
+  hasKey: hasKey,
+  isTest: isTest,
+  searchText: searchText,
+  searchNearby: searchNearby,
+  geocode: geocode,
+  reverseGeocode: reverseGeocode,
+  computeRoute: computeRoute,
+  staticMap: staticMap,
+  staticMapUrl: staticMapUrl,
+  checkKey: checkKey,
+  friendlyError: friendlyError,
+  config: config
+};

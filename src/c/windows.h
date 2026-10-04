@@ -1,0 +1,40 @@
+// Pebble Maps - screens
+#pragma once
+#include "common.h"
+#include "ui.h"
+
+// Home: current location map with search bar
+void home_window_push(void);
+Window *home_window_get(void);
+void pop_to_home(void);
+
+// Results (search / nearby): map with pins + bottom card, toggle to list
+void results_window_push_search(const char *query);
+void results_window_push_nearby(int category);
+
+// Generic lists
+typedef enum { LW_FAVS, LW_CATEGORIES, LW_MODES, LW_STEPS, LW_SETMODE } ListKind;
+void list_window_push(ListKind kind, int arg);
+
+// Place card
+void place_window_push(int src, int idx, const char *title);
+int place_default_mode(void);
+
+// Route overview
+void route_window_push(int mode);
+
+// Turn-by-turn navigation
+void nav_window_push(int mode);
+
+// Info / error message screen
+void msg_window_push(IconId icon, const char *title, const char *body, bool pop_on_configured);
+void show_error(DictionaryIterator *it);
+
+// Explore categories (shared with JS by index)
+#define CATEGORY_COUNT 12
+extern const char *const CATEGORY_NAMES[CATEGORY_COUNT];
+extern const uint8_t CATEGORY_ICONS[CATEGORY_COUNT];
+extern const uint8_t CATEGORY_COLORS[CATEGORY_COUNT];
+
+// List message parsing: fields separated by 0x1F, items by 0x1E.
+int parse_list(const char *packed, ListItem *items, int max);
