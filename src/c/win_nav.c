@@ -459,7 +459,7 @@ static void window_load(Window *window) {
   dots_layer_set_running(s_dots, true);
   mapbar_init(&s_bar, s_canvas, b.size, ICON_MYLOC, ICON_MAP, bar_cb, NULL);
   s_bar.extra_up_color = C_BLUE;
-  s_bar.extra_down_color = C_BLUE;
+  s_bar.extra_down_color = C_ICON;
   maptouch_init(&s_touch, GRect(0, 0, b.size.w - STRIP_W, b.size.h), map_tap, NULL, &s_bar);
 }
 

@@ -291,11 +291,6 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   bool hl = menu_cell_layer_is_highlighted(cell);
   GColor fg = hl ? GColorWhite : C_TEXT;
   GColor sub_fg = hl ? GColorWhite : C_SUBTEXT;
-  // divider under each row
-  if (!hl) {
-    graphics_context_set_stroke_color(ctx, C_DIVIDER);
-    graphics_draw_line(ctx, GPoint(PBL_IF_ROUND_ELSE(24, 6), b.size.h - 1), GPoint(b.size.w - PBL_IF_ROUND_ELSE(24, 6), b.size.h - 1));
-  }
 #ifdef PBL_COLOR
   bool keep_color = (icon == ICON_STAR);
 #else
@@ -476,6 +471,8 @@ static void window_load(Window *window) {
     .draw_header = draw_header,
     .get_cell_height = cell_h,
     .draw_row = draw_row,
+    .get_separator_height = ui_separator_h,
+    .draw_separator = ui_draw_separator,
     .select_click = select_cb,
     .select_long_click = select_long_cb,
   });

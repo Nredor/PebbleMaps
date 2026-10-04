@@ -499,12 +499,16 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 27, 13, 13, 27);
       break;
     case ICON_MAP: {
-      static const int8_t a[] = {3, 8, 14, 4, 14, 32, 3, 36};
-      static const int8_t b[] = {16, 4, 24, 8, 24, 36, 16, 32};
-      static const int8_t c2[] = {26, 8, 37, 4, 37, 32, 26, 36};
-      poly(ctx, a, 4, true);
-      poly(ctx, b, 4, true);
-      poly(ctx, c2, 4, true);
+      // folded paper map, drawn as an outline like the other icons
+      static const int8_t m[] = {4, 9, 14, 5, 26, 9, 36, 5, 36, 31, 26, 35, 14, 31, 4, 35};
+      graphics_context_set_stroke_width(ctx, sw + 1);
+      for (int i = 0; i < 8; i++) {
+        int j = (i + 1) % 8;
+        line(ctx, m[2 * i], m[2 * i + 1], m[2 * j], m[2 * j + 1]);
+      }
+      graphics_context_set_stroke_width(ctx, sw);
+      line(ctx, 14, 5, 14, 31);
+      line(ctx, 26, 9, 26, 35);
       break;
     }
     case ICON_KEY:
@@ -929,4 +933,19 @@ void vibe_now(void) {
   static const uint32_t segs[] = {400, 150, 400};
   VibePattern p = { .durations = segs, .num_segments = ARRAY_LENGTH(segs) };
   vibes_enqueue_custom_pattern(p);
+}
+
+// --- List dividers -------------------------------------------------------------------
+#define SEP_PAD 3
+int16_t ui_separator_h(MenuLayer *menu, MenuIndex *index, void *ctx) {
+  return SEP_PAD * 2 + 1;
+}
+
+void ui_draw_separator(GContext *ctx, const Layer *cell, MenuIndex *index, void *cb) {
+  GRect b = layer_get_bounds(cell);
+  graphics_context_set_fill_color(ctx, C_BG);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_stroke_color(ctx, C_DIVIDER);
+  int inset = PBL_IF_ROUND_ELSE(24, 6);
+  graphics_draw_line(ctx, GPoint(inset, SEP_PAD), GPoint(b.size.w - inset, SEP_PAD));
 }

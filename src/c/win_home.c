@@ -1,5 +1,6 @@
 // Pebble Maps - home screen: your location on a Google map, search bar, actions
 #include "windows.h"
+#include "keyboard.h"
 #include "comm.h"
 #include "mapdata.h"
 #include "mapbar.h"
@@ -161,6 +162,10 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 }
 
+static void typed_search(const char *text, void *ctx) {
+  results_window_push_search(text);
+}
+
 // --- Dictation -------------------------------------------------------------
 static void dictation_cb(DictationSession *session, DictationSessionStatus status,
                          char *transcription, void *ctx) {
@@ -253,8 +258,14 @@ static void touch_cb(const TouchEvent *e, void *ctx) {
 }
 
 static void map_tap(GPoint p, void *ctx) {
-  // tapping the search bar starts a voice search
-  if (!s_bar.open && p.y < g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0)) press(BUTTON_ID_SELECT);
+  // tapping the search bar opens the keyboard (the mic button is for voice)
+  if (s_bar.open || p.y >= g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0)) return;
+#if KEYBOARD_AVAILABLE
+  if (!g_app.configured) { show_setup(); return; }
+  keyboard_window_push("Search for a place", "Search", typed_search, NULL);
+#else
+  press(BUTTON_ID_SELECT);
+#endif
 }
 
 // --- Lifecycle -------------------------------------------------------------

@@ -96,6 +96,11 @@ void ui_toast_cancel(void);
 // Format a unix time as local clock text ("2:43 PM" or "14:43")
 void format_clock(time_t t, char *buf, size_t len);
 
+// List dividers: a thin line with a few pixels of white above and below,
+// so the highlighted row never touches it
+int16_t ui_separator_h(MenuLayer *menu, MenuIndex *index, void *ctx);
+void ui_draw_separator(GContext *ctx, const Layer *cell, MenuIndex *index, void *cb);
+
 // Rounded "card" background with subtle border
 void draw_card(GContext *ctx, GRect r, int radius);
 
