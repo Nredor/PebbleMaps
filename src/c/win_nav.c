@@ -81,12 +81,15 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       s_next_man = tuple_int(it, MESSAGE_KEY_idx, MAN_NONE);
       s_arrive = (time_t)tuple_int(it, MESSAGE_KEY_num2, 0);
       s_flags = tuple_int(it, MESSAGE_KEY_flags, 0);
-      if (dict_find(it, MESSAGE_KEY_width)) {
+      // arrow position is in the coordinates of a particular picture
+      int img = tuple_int(it, MESSAGE_KEY_img, -1);
+      if (dict_find(it, MESSAGE_KEY_width) && (img < 0 || img == g_map.img_id)) {
         s_have_puck = true;
         s_puck = GPoint(tuple_int(it, MESSAGE_KEY_width, 0), tuple_int(it, MESSAGE_KEY_height, 0));
         s_focus = GPoint(tuple_int(it, MESSAGE_KEY_stride, s_puck.x), tuple_int(it, MESSAGE_KEY_total, s_puck.y));
         s_heading = tuple_int(it, MESSAGE_KEY_offset, 0);
         s_map_heading = tuple_int(it, MESSAGE_KEY_mode, 0);
+        if (dict_find(it, MESSAGE_KEY_ack)) map_apply_ack(tuple_int(it, MESSAGE_KEY_ack, 0));
       }
       bool was_arrived = s_arrived;
       s_arrived = (s_flags & NAV_ARRIVED) != 0;
@@ -108,6 +111,15 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       layer_mark_dirty(s_canvas);
       break;
   }
+}
+
+// The picture was moved in place (slid, zoomed or turned): keep the arrow on the same spot
+static void on_xform(const MapXform *x) {
+  s_focus = map_xform_point(x, s_focus);
+  s_puck = map_xform_point(x, s_puck);
+  s_heading = (s_heading + x->rot + 360) % 360;
+  s_map_heading = g_map.rheading;
+  if (s_canvas) layer_mark_dirty(s_canvas);
 }
 
 // --- Drawing -------------------------------------------------------------------
@@ -257,7 +269,7 @@ static void send_view_mode(void) {
   OutMsg m;
   comm_msg_init(&m, CMD_NAV_VIEW);
   m.idx = s_heading_up ? 1 : 0;
-  m.seq = map_new_seq();
+  m.seq = g_map.seq;
   comm_send(&m);
 }
 
@@ -454,12 +466,14 @@ static void window_load(Window *window) {
 static void window_appear(Window *window) {
   comm_set_handler(handle, NULL);
   map_set_observer(s_canvas);
+  map_set_xform_listener(on_xform);
   if (g_app.touch) touch_service_subscribe(touch_cb, NULL);
 }
 
 static void window_disappear(Window *window) {
   comm_clear_handler(handle);
   map_set_observer(NULL);
+  map_set_xform_listener(NULL);
   ui_toast_cancel();
   mapbar_deinit(&s_bar);
   maptouch_deinit(&s_touch);

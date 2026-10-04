@@ -63,7 +63,7 @@ function fetchTile(o, key, c, cb) {
         var b = image.toBase(image.decodePNG(bytes), o.format);
         // the picture is centered on the rounded center we asked for
         var pc = geo.project(center[0], center[1], o.zoom);
-        tile = { key: key, zoom: o.zoom, format: o.format, w: b.width, h: b.height, px: b.px,
+        tile = { key: key, zoom: o.zoom, format: o.format, style: o.style, w: b.width, h: b.height, px: b.px,
                  x0: pc[0] - b.width / 2, y0: pc[1] - b.height / 2 };
         tiles.unshift(tile);
         if (tiles.length > MAX_TILES) tiles.pop();
@@ -79,7 +79,7 @@ function fetchTile(o, key, c, cb) {
 // (degrees clockwise from north) points up. Returns packed watch image.
 function render(t, c, w, h, heading, format) {
   var out = new Uint8Array(w * h);
-  var bg = image.WHITE[format === 1 ? 1 : 0];
+  var bg = image.background(format, t.style);
   var a = geo.rad(heading || 0);
   var cs = Math.cos(a), sn = Math.sin(a);
   // screen (dx, dy) -> world (dx*cs - dy*sn, dx*sn + dy*cs)
@@ -98,14 +98,18 @@ function render(t, c, w, h, heading, format) {
       sy += sn;
     }
   }
-  return image.pack(out, w, h, format);
+  return image.pack(out, w, h, format, t.style);
 }
 
-// Get a watch picture. o = { center:[lat,lng], zoom, w, h, heading, style, format, path, markers }
+function centerOf(o) {
+  return o.c || geo.project(o.center[0], o.center[1], o.zoom);
+}
+
+// Get a watch picture. o = { center:[lat,lng] or c:[world x,y], zoom, w, h, heading, style, format, path, markers }
 // cb(err, packedImage)
 function get(o, cb) {
   var key = styleKey(o);
-  var c = geo.project(o.center[0], o.center[1], o.zoom);
+  var c = centerOf(o);
   var rotated = !!o.heading;
   var t = findTile(key, c, o.w, o.h, rotated);
   if (t) return cb(null, render(t, c, o.w, o.h, o.heading, o.format));
@@ -142,6 +146,7 @@ function queue(o, zoom, c) {
   var oo = {};
   Object.keys(o).forEach(function (k) { oo[k] = o[k]; });
   oo.zoom = zoom;
+  oo.c = c;
   var key = styleKey(oo);
   prefetchQueue.push({ o: oo, key: key, c: c, w: o.w, h: o.h, rotated: !!o.heading });
 }
@@ -151,7 +156,7 @@ function queue(o, zoom, c) {
 function prefetchAround(o, withZoom) {
   prefetchQueue = [];
   var key = styleKey(o);
-  var c = geo.project(o.center[0], o.center[1], o.zoom);
+  var c = centerOf(o);
   var t = findTile(key, c, o.w, o.h, !!o.heading);
   if (t) {
     // if one more pan step (a third of the view) would leave this picture, prefetch around the view
@@ -159,14 +164,9 @@ function prefetchAround(o, withZoom) {
     if (!covers(t, c, o.w + step, o.h + step, !!o.heading)) queue(o, o.zoom, c);
   }
   if (withZoom) {
-    if (o.zoom < 20) {
-      var cin = geo.project(o.center[0], o.center[1], o.zoom + 1);
-      queue(o, o.zoom + 1, cin);
-    }
-    if (o.zoom > 3) {
-      var cout = geo.project(o.center[0], o.center[1], o.zoom - 1);
-      queue(o, o.zoom - 1, cout);
-    }
+    // zooming out first: its picture also fills the edges when the watch shrinks the view
+    if (o.zoom > 3) queue(o, o.zoom - 1, [c[0] / 2, c[1] / 2]);
+    if (o.zoom < 20) queue(o, o.zoom + 1, [c[0] * 2, c[1] * 2]);
   }
   pumpPrefetch();
 }
@@ -176,4 +176,4 @@ function clear() {
   prefetchQueue = [];
 }
 
-module.exports = { get: get, prefetchAround: prefetchAround, clear: clear, SIZE: SIZE };
+module.exports = { get: get, styleKey: styleKey, prefetchAround: prefetchAround, clear: clear, SIZE: SIZE };

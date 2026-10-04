@@ -150,8 +150,41 @@ function toBase(img, format) {
   return { width: img.width, height: img.height, px: px };
 }
 
+// Each map style uses one fixed set of 16 colors, so a picture the watch
+// already has and new pieces sent later always match. Slot 0 is the map
+// background (used to fill areas with nothing in them yet).
+var PALETTES = {
+  light: [0x3F, 0x15, 0x2E, 0x04, 0x1B, 0x06, 0x2A, 0x38, 0x00, 0x07, 0x30, 0x24, 0x2B, 0x3A, 0x0B, 0x3E],
+  dark: [0x01, 0x2A, 0x04, 0x02, 0x15, 0x24, 0x3F, 0x1B, 0x30, 0x00, 0x05, 0x16, 0x06, 0x10, 0x2F, 0x19]
+};
+var palMaps = {};
+
+function paletteFor(style) { return PALETTES[style] || PALETTES.light; }
+
+function paletteMap(style) {
+  var key = PALETTES[style] ? style : 'light';
+  if (palMaps[key]) return palMaps[key];
+  var pal = PALETTES[key];
+  var map = new Uint8Array(64);
+  for (var m = 0; m < 64; m++) {
+    var best = 0, bestD = 1e9;
+    for (var j = 0; j < pal.length; j++) {
+      var d = colorDist(m, pal[j]);
+      if (d < bestD) { bestD = d; best = j; }
+    }
+    map[m] = best;
+  }
+  palMaps[key] = map;
+  return map;
+}
+
+// Background "base" pixel for a style
+function background(format, style) {
+  return format === 1 ? paletteFor(style)[0] : 255;
+}
+
 // Pack base pixels for the watch (16-color 4-bit, or dithered 1-bit)
-function pack(px, w, h, format) {
+function pack(px, w, h, format, style) {
   if (format !== 1) {
     var stride1 = ((w + 31) >> 5) * 4;
     var data1 = new Uint8Array(stride1 * h);
@@ -163,23 +196,7 @@ function pack(px, w, h, format) {
     }
     return { width: w, height: h, stride: stride1, palette: [], data: data1, format: 0 };
   }
-  var n = w * h;
-  var counts = new Array(64);
-  for (var c = 0; c < 64; c++) counts[c] = 0;
-  for (var i = 0; i < n; i++) counts[px[i]]++;
-  var used = [];
-  for (var k = 0; k < 64; k++) if (counts[k]) used.push(k);
-  used.sort(function (a, b) { return counts[b] - counts[a]; });
-  var chosen = used.slice(0, 16);
-  var map = new Uint8Array(64);
-  for (var m = 0; m < 64; m++) {
-    var best = 0, bestD = 1e9;
-    for (var j = 0; j < chosen.length; j++) {
-      var d = colorDist(m, chosen[j]);
-      if (d < bestD) { bestD = d; best = j; }
-    }
-    map[m] = best;
-  }
+  var map = paletteMap(style);
   var stride = (w + 1) >> 1;
   var data = new Uint8Array(stride * h);
   for (var y = 0; y < h; y++) {
@@ -190,8 +207,7 @@ function pack(px, w, h, format) {
       else data[o] |= v << 4;   // leftmost pixel in the high nibble
     }
   }
-  var palette = [];
-  for (var p = 0; p < 16; p++) palette.push(0xC0 | (p < chosen.length ? chosen[p] : 0x3F));
+  var palette = paletteFor(style).map(function (c) { return 0xC0 | c; });
   return { width: w, height: h, stride: stride, palette: palette, data: data, format: 1 };
 }
 
@@ -209,5 +225,7 @@ module.exports = {
   toBase: toBase,
   pack: pack,
   WHITE: WHITE,
+  background: background,
+  PALETTES: PALETTES,
   pebbleColor: pebbleColor
 };

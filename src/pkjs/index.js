@@ -146,44 +146,176 @@ function markerFor(p, view, kind, index) {
   return { x: s[0], y: s[1], kind: kind, index: index || 0 };
 }
 
-function sendImage(seq, img, markers, onBegin, onFinished) {
-  send({
+// --- What the watch's picture buffer holds ------------------------------------
+// The watch keeps its current picture on screen and moves it (slide / zoom /
+// turn) to line up with each new one; we then only send what is new.
+var wimg = null;          // { id, c:[x,y] world px at center, zoom, heading, w, h, key, ok, valid }
+var imgCounter = 0;
+var panAck = 0;           // newest map move from the watch that we've applied
+var renderToken = 0;
+var refreshFn = null;
+var refreshTimer = null;
+
+function scheduleRefresh() {
+  if (refreshTimer || !refreshFn) return;
+  refreshTimer = setTimeout(function () {
+    refreshTimer = null;
+    if (wimg) wimg.valid = false;
+    if (refreshFn) refreshFn();
+  }, 400);
+}
+
+// The watch zooms its picture the moment the button is pressed; keep our copy in step
+function mirrorAdjust(p) {
+  if (p.num !== undefined && p.num !== null) panAck = p.num;
+  if (wimg && (p.idx === P.ADJ.ZOOM_IN || p.idx === P.ADJ.ZOOM_OUT)) {
+    var f = p.idx === P.ADJ.ZOOM_IN ? 2 : 0.5;
+    wimg.c = [wimg.c[0] * f, wimg.c[1] * f];
+    wimg.zoom += p.idx === P.ADJ.ZOOM_IN ? 1 : -1;
+    wimg.valid = false;
+  }
+}
+
+// Choose the exact picture center so it is a whole-pixel slide of what the watch has
+function planImage(c, zoom, heading, w, h) {
+  var p = wimg;
+  if (p && p.ok && p.zoom === zoom && p.heading === heading && p.w === w && p.h === h) {
+    var v = toScreenOffset(p.c[0] - c[0], p.c[1] - c[1], heading);
+    v = [Math.round(v[0]), Math.round(v[1])];
+    var dw = toWorld(v[0], v[1], heading);
+    return { c: [p.c[0] - dw[0], p.c[1] - dw[1]], ref: p.id, v: v };
+  }
+  return { c: c, ref: 0, v: [0, 0] };
+}
+
+// Parts of a w x h picture that are new after sliding by v (null = send it all)
+function stripRects(v, w, h) {
+  var vx = v[0], vy = v[1];
+  var ax = Math.abs(vx), ay = Math.abs(vy);
+  if (ax >= w || ay >= h) return null;
+  if ((ay * w + ax * (h - ay)) > 0.6 * w * h) return null;
+  var rects = [];
+  if (vy > 0) rects.push({ y0: 0, y1: vy, x0: 0, x1: w });
+  else if (vy < 0) rects.push({ y0: h + vy, y1: h, x0: 0, x1: w });
+  var ry0 = vy > 0 ? vy : 0, ry1 = vy < 0 ? h + vy : h;
+  if (vx > 0) rects.push({ y0: ry0, y1: ry1, x0: 0, x1: vx });
+  else if (vx < 0) rects.push({ y0: ry0, y1: ry1, x0: w + vx, x1: w });
+  return rects;
+}
+
+// Whole picture, as bands of rows from the middle outward
+function centerOutRects(w, h, rowsPer) {
+  var rects = [];
+  var mid = Math.floor(h / 2);
+  var top = Math.max(0, mid - Math.floor(rowsPer / 2)), bot = Math.min(h, top + rowsPer);
+  rects.push({ y0: top, y1: bot, x0: 0, x1: w });
+  while (top > 0 || bot < h) {
+    if (top > 0) { var t0 = Math.max(0, top - rowsPer); rects.push({ y0: t0, y1: top, x0: 0, x1: w }); top = t0; }
+    if (bot < h) { var b1 = Math.min(h, bot + rowsPer); rects.push({ y0: bot, y1: b1, x0: 0, x1: w }); bot = b1; }
+  }
+  return rects;
+}
+
+// Cut rects into AppMessage-sized pieces: { y, xb, stride, data }
+function chunksFor(img, rects) {
+  var out = [];
+  var room = Math.max(64, watch.inbox - 110);
+  rects.forEach(function (r) {
+    var xb0, xb1;
+    if (img.format === 1) { xb0 = r.x0 >> 1; xb1 = (r.x1 + 1) >> 1; }
+    else { xb0 = r.x0 >> 3; xb1 = (r.x1 + 7) >> 3; }
+    xb1 = Math.min(xb1, img.stride);
+    var bw = xb1 - xb0;
+    if (bw <= 0 || r.y1 <= r.y0) return;
+    var rows = Math.max(1, Math.floor(room / bw));
+    for (var y = r.y0; y < r.y1; y += rows) {
+      var n = Math.min(rows, r.y1 - y);
+      var data = new Array(n * bw);
+      for (var i = 0; i < n; i++) {
+        var so = (y + i) * img.stride + xb0;
+        for (var j = 0; j < bw; j++) data[i * bw + j] = img.data[so + j];
+      }
+      out.push({ y: y, xb: xb0, stride: bw, data: data });
+    }
+  });
+  return out;
+}
+
+// Send a picture. plan: from planImage; info: { zoom, heading, key }
+// onBegin runs right after the start message is queued; onDone when every piece is delivered (or failed).
+function pushImage(seq, img, plan, info, markers, opts) {
+  opts = opts || {};
+  var prev = wimg;
+  var ref = prev && plan.ref && prev.id === plan.ref ? plan.ref : 0;
+  var rects = null;
+  if (ref && prev.valid && prev.key === info.key) rects = stripRects(plan.v, img.width, img.height);
+  if (!rects) {
+    msg.drop('map:');   // a whole new picture replaces anything still waiting
+    rects = centerOutRects(img.width, img.height, Math.max(1, Math.floor((watch.inbox - 110) / img.stride)));
+  }
+  imgCounter = imgCounter % 30000 + 1;
+  var cur = { id: imgCounter, c: plan.c, zoom: info.zoom, heading: info.heading, w: img.width, h: img.height,
+              key: info.key, ok: true, valid: true };
+  wimg = cur;
+  var dict = {
     cmd: CMD.MAP_BEGIN, seq: seq, width: img.width, height: img.height, fmt: img.format,
-    stride: img.stride, palette: img.palette, total: img.data.length
-  }, 'map:' + seq);
+    stride: img.stride, palette: img.palette, img: cur.id, ref: ref, vx: plan.v[0], vy: plan.v[1],
+    idx: Math.round(plan.c[0]), mode: Math.round(plan.c[1]), num: info.zoom,
+    num2: ((Math.round(info.heading || 0) % 360) + 360) % 360
+  };
+  if (opts.ack) dict.ack = panAck;
+  var chunks = chunksFor(img, rects);
+  var pending = chunks.length + 1;
+  var finished = false;
+  function oneDone(ok) {
+    if (!ok) {
+      cur.valid = false;
+      scheduleRefresh();
+    }
+    if (--pending === 0 && !finished) {
+      finished = true;
+      if (opts.onDone) opts.onDone();
+    }
+  }
+  msg.send(dict, 'map:' + seq, function (ok) {
+    if (!ok) cur.ok = false;
+    oneDone(ok);
+  });
   if (markers) {
     var mk = encodeMarkers(markers.filter(Boolean));
     if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
     else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
   }
-  if (onBegin) onBegin();
-  var rows = Math.max(1, Math.floor((watch.inbox - 80) / img.stride));
-  var chunk = rows * img.stride;
-  for (var off = 0; off < img.data.length; off += chunk) {
-    var part = img.data.subarray(off, Math.min(img.data.length, off + chunk));
-    var last = off + chunk >= img.data.length;
-    msg.send({ cmd: CMD.MAP_CHUNK, seq: seq, offset: off, data: Array.prototype.slice.call(part) }, 'map:' + seq,
-      last ? onFinished : null);
-  }
+  if (opts.onBegin) opts.onBegin();
+  chunks.forEach(function (ch) {
+    msg.send({ cmd: CMD.MAP_CHUNK, seq: seq, img: cur.id, offset: ch.y, num: ch.xb, stride: ch.stride, data: ch.data },
+      'map:' + seq, oneDone);
+  });
 }
 
-// view: {center, zoom, w, h (screen area), heading?, path?, gmarkers?}
+// view: {center, zoom, w, h (screen area), path?, gmarkers?}
 // markers: array of {x,y,kind,index} or null. done(err) once the picture starts streaming.
 function streamMap(seq, view, markers, done, quiet) {
   currentMapSeq = seq;
-  msg.drop('map:');
+  var token = ++renderToken;
   var os = outSize(view.w, view.h);
-  var o = { center: view.center, zoom: view.zoom, w: os[0], h: os[1], heading: view.heading || 0,
+  var c0 = geo.project(view.center[0], view.center[1], view.zoom);
+  var plan = planImage(c0, view.zoom, 0, os[0], os[1]);
+  var o = { c: plan.c, center: view.center, zoom: view.zoom, w: os[0], h: os[1], heading: 0,
             style: mapStyle(), format: watch.fmt, path: view.path, markers: view.gmarkers };
+  refreshFn = function () { if (currentMapSeq === seq && !navState) streamMap(seq, view, markers, null, true); };
   tiles.get(o, function (err, img) {
-    if (seq !== currentMapSeq) { if (done) done({ stale: true }); return; }
+    if (token !== renderToken || seq !== currentMapSeq) { if (done) done({ stale: true }); return; }
     if (err) {
       console.log('map error ' + JSON.stringify(err));
       if (!quiet && (err.code === P.ERR.NO_KEY || err.title)) sendError(err);
       if (done) done(err);
       return;
     }
-    sendImage(seq, img, markers, function () { if (done) done(null); });
+    pushImage(seq, img, plan, { zoom: view.zoom, heading: 0, key: tiles.styleKey(o) }, markers, {
+      ack: true,
+      onBegin: function () { if (done) done(null); }
+    });
     tiles.prefetchAround(o, true);
   });
 }
@@ -209,6 +341,7 @@ function showView(seq, kind, base, markersFn, restore) {
 }
 
 function onAdjust(p) {
+  mirrorAdjust(p);
   if (navigator_ && navState) return navAdjust(p);
   var st = views[lastKind];
   if (!st) return;
@@ -547,34 +680,37 @@ function navTarget() {
 // Fill NAV message with arrow / focus positions inside the picture the watch has
 function navAugment(d) {
   var st = navState;
-  if (!st || !st.shown || !navigator_ || !navigator_.pos) return d;
-  var sh = st.shown;
+  if (!st || !st.shown || !wimg || !navigator_ || !navigator_.pos) return d;
+  var sh = wimg;
   var pos = geo.project(navigator_.pos[0], navigator_.pos[1], sh.zoom);
   var pv = toScreenOffset(pos[0] - sh.c[0], pos[1] - sh.c[1], sh.heading);
-  d.width = Math.round(pv[0] + sh.ow / 2);
-  d.height = Math.round(pv[1] + sh.oh / 2);
+  d.width = Math.round(pv[0] + sh.w / 2);
+  d.height = Math.round(pv[1] + sh.h / 2);
   var t = navTarget();
   if (t.zoom === sh.zoom && !st.overview) {
     var fv = toScreenOffset(t.focus[0] - sh.c[0], t.focus[1] - sh.c[1], sh.heading);
-    d.stride = Math.round(fv[0] + sh.ow / 2);
-    d.total = Math.round(fv[1] + sh.oh / 2);
+    d.stride = Math.round(fv[0] + sh.w / 2);
+    d.total = Math.round(fv[1] + sh.h / 2);
   } else {
-    d.stride = Math.round(sh.ow / 2);
-    d.total = Math.round(sh.oh / 2);
+    d.stride = Math.round(sh.w / 2);
+    d.total = Math.round(sh.h / 2);
   }
-  d.offset = Math.round(((navigator_.heading || 0) - sh.heading + 360) % 360);
-  d.mode = Math.round(sh.heading) % 360;
+  d.offset = Math.round((((navigator_.heading || 0) - sh.heading) % 360 + 360) % 360);
+  d.mode = ((Math.round(sh.heading) % 360) + 360) % 360;
+  d.img = sh.id;
+  d.ack = panAck;
   return d;
 }
 
 function navNeedsRender(t) {
-  var st = navState, sh = st.shown;
-  if (!sh || sh.zoom !== t.zoom || sh.follow !== t.follow || sh.overview !== st.overview) return true;
-  if (angleDiff(sh.heading, t.heading) > 15) return true;
+  var st = navState, sh = st.shown, w = wimg;
+  if (!sh || !w || w.zoom !== t.zoom || sh.follow !== t.follow || sh.overview !== st.overview) return true;
+  if (angleDiff(w.heading, t.heading) > 15) return true;
   // how far the focus point has slid inside the picture
-  var v = toScreenOffset(t.focus[0] - sh.focus[0], t.focus[1] - sh.focus[1], sh.heading);
-  var mx = (sh.ow - st.w) / 2, my = (sh.oh - st.h) / 2;
-  var ahead = 0.22 * st.h;   // the picture reaches this much further ahead
+  var fv = toScreenOffset(t.focus[0] - w.c[0], t.focus[1] - w.c[1], w.heading);
+  var mx = (w.w - st.w) / 2, my = (w.h - st.h) / 2;
+  var ahead = 0.22 * st.h;   // the picture reaches this much further ahead of the focus
+  var v = [fv[0], fv[1] - (sh.follow ? ahead : 0)];
   return Math.abs(v[0]) > mx + 0.12 * st.w || v[1] < -(my + ahead - 4) || v[1] > my + 0.15 * st.h;
 }
 
@@ -586,33 +722,42 @@ function navRender(force) {
   if (st.streaming && !force) { st.pending = true; return; }
   var r = navigator_.route;
   var d = r.dest;
+  // keep the picture's turn while the heading only drifts a little: the watch can then just slide it
+  var heading = t.heading;
+  if (wimg && wimg.zoom === t.zoom && angleDiff(wimg.heading, heading) <= 15) heading = wimg.heading;
   // picture center: a little further ahead than the focus, so there is map in front of you
-  var shift = t.follow ? toWorld(0, -0.22 * st.h, t.heading) : [0, 0];
+  var shift = t.follow ? toWorld(0, -0.22 * st.h, heading) : [0, 0];
   var c = [t.focus[0] + shift[0], t.focus[1] + shift[1]];
   var os = outSize(st.w, st.h);
+  var plan = planImage(c, t.zoom, heading, os[0], os[1]);
   var seq = st.seq;
+  var token = ++renderToken;
   st.streaming = true;
   st.pending = false;
   clearTimeout(st.streamTimer);
   st.streamTimer = setTimeout(function () { if (navState) navState.streaming = false; }, 9000);
-  var view = { c: c, zoom: t.zoom, heading: t.heading, ow: os[0], oh: os[1], focus: t.focus, follow: t.follow, overview: st.overview };
+  var view = { zoom: t.zoom, heading: heading, focus: t.focus, follow: t.follow, overview: st.overview };
   currentMapSeq = seq;
-  msg.drop('map:');
-  tiles.get({
-    center: geo.unproject(c[0], c[1], t.zoom), zoom: t.zoom, w: os[0], h: os[1], heading: t.heading,
+  refreshFn = function () { if (navState && navState.seq === seq) { navState.streaming = false; navRender(true); } };
+  var o = {
+    c: plan.c, center: geo.unproject(plan.c[0], plan.c[1], t.zoom), zoom: t.zoom, w: os[0], h: os[1], heading: heading,
     style: mapStyle(), format: watch.fmt, path: geo.thin(r.points, 300),
     markers: d ? ['size:small|color:red|' + d.lat.toFixed(6) + ',' + d.lng.toFixed(6)] : null,
     ahead: t.follow ? toWorld(0, -1, navigator_.heading || 0) : null
-  }, function (err, img) {
-    if (!navState || navState.seq !== seq) return;
+  };
+  tiles.get(o, function (err, img) {
+    if (!navState || navState.seq !== seq || token !== renderToken) return;
     if (err) { navState.streaming = false; return; }
-    sendImage(seq, img, null, function () {
-      navState.shown = view;
-      if (navigator_ && navigator_.lastDict) send(navAugment(JSON.parse(JSON.stringify(navigator_.lastDict))), 'nav');
-    }, function () {
-      if (!navState) return;
-      navState.streaming = false;
-      if (navState.pending) navRender(false);
+    pushImage(seq, img, plan, { zoom: t.zoom, heading: heading, key: tiles.styleKey(o) }, null, {
+      onBegin: function () {
+        navState.shown = view;
+        if (navigator_ && navigator_.lastDict) send(navAugment(JSON.parse(JSON.stringify(navigator_.lastDict))), 'nav');
+      },
+      onDone: function () {
+        if (!navState) return;
+        navState.streaming = false;
+        if (navState.pending) navRender(false);
+      }
     });
   });
 }
@@ -668,6 +813,7 @@ function stopNav() {
   navigator_ = null;
   if (navState) clearTimeout(navState.streamTimer);
   navState = null;
+  refreshFn = null;
 }
 
 function startSimulation() {
@@ -799,16 +945,16 @@ function onMessage(e) {
         }
         sendStatus();
         break;
-      case CMD.HOME_MAP: onHomeMap(p); break;
+      case CMD.HOME_MAP: wimg = null; onHomeMap(p); break;
       case CMD.SEARCH: onSearch(p); break;
       case CMD.NEARBY: onNearby(p); break;
-      case CMD.RESULTS_MAP: onResultsMap(p); break;
+      case CMD.RESULTS_MAP: wimg = null; onResultsMap(p); break;
       case CMD.SELECT: onSelect(p); break;
-      case CMD.PLACE_MAP: onPlaceMap(p); break;
+      case CMD.PLACE_MAP: wimg = null; onPlaceMap(p); break;
       case CMD.MODE_TIMES: onModeTimes(); break;
-      case CMD.ROUTE: onRoute(p); break;
+      case CMD.ROUTE: wimg = null; onRoute(p); break;
       case CMD.STEPS: onSteps(); break;
-      case CMD.NAV_START: onNavStart(p); break;
+      case CMD.NAV_START: wimg = null; onNavStart(p); break;
       case CMD.NAV_STOP: stopNav(); break;
       case CMD.FAV_LIST: onFavList(); break;
       case CMD.FAV_TOGGLE: onFavToggle(); break;

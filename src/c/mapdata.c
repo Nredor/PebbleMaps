@@ -1,4 +1,10 @@
-// Pebble Maps - receives Google Static Maps images (converted by the phone)
+// Pebble Maps - the watch's map picture
+//
+// The phone sends pictures cut from Google Static Maps. Each picture says
+// where it sits in the world. When a new one arrives, the watch first moves
+// the picture it already has (slide, zoom or turn) to line up with the new
+// one, so the screen never goes blank; the phone then only needs to send the
+// parts that are actually new (or the full sharp picture, center first).
 #include "mapdata.h"
 #include "comm.h"
 #include "ui.h"
@@ -6,14 +12,21 @@
 MapData g_map;
 static int s_next_seq = 1;
 
-// One screen-sized picture buffer, reserved once and reused for every map.
-// (Allocating a fresh 12 KB block per map fails on the original Pebble Time
-// once memory gets fragmented.)
+// One picture buffer, reserved once and reused for every map.
 static GBitmap *s_buf;
 static GSize s_buf_size;
+static int s_bpr;
+static uint8_t *s_tmp;        // one row or column of pixels
 #ifdef PBL_COLOR
 static GColor s_palette[16];
+#define BG_PX 0               // palette slot 0 is the map background
+#define BG_BYTE 0x00
+#else
+#define BG_PX 1               // white
+#define BG_BYTE 0xFF
 #endif
+
+static MapXformFn s_listener;
 
 static uint32_t buf_bytes(int w, int h) {
 #ifdef PBL_COLOR
@@ -45,23 +58,222 @@ void map_reserve(void) {
 #else
   s_buf = gbitmap_create_blank(s_buf_size, GBitmapFormat1Bit);
 #endif
+  if (s_buf) s_bpr = gbitmap_get_bytes_per_row(s_buf);
+  s_tmp = malloc(s_buf_size.w > s_buf_size.h ? s_buf_size.w : s_buf_size.h);
 }
 
 void map_release(void) {
   g_map.bmp = NULL;
   g_map.complete = false;
-  g_map.got = g_map.total = 0;
+  g_map.ref_valid = false;
+  g_map.chunk_img = -1;
 }
 
-void map_set_observer(Layer *layer) {
-  g_map.observer = layer;
-}
+void map_set_observer(Layer *layer) { g_map.observer = layer; }
+void map_set_xform_listener(MapXformFn fn) { s_listener = fn; }
 
 static void notify(void) {
   if (g_map.observer) layer_mark_dirty(g_map.observer);
 }
 
+// --- Pixel helpers -----------------------------------------------------------------
+static inline uint8_t *row_ptr(int y) { return gbitmap_get_data(s_buf) + y * s_bpr; }
+
+#ifdef PBL_COLOR
+static inline int pget(const uint8_t *r, int x) {
+  uint8_t b = r[x >> 1];
+  return (x & 1) ? (b & 0x0F) : (b >> 4);   // leftmost pixel in the high nibble
+}
+static inline void pset(uint8_t *r, int x, int v) {
+  uint8_t *b = &r[x >> 1];
+  if (x & 1) *b = (*b & 0xF0) | v;
+  else *b = (*b & 0x0F) | (v << 4);
+}
+#else
+static inline int pget(const uint8_t *r, int x) { return (r[x >> 3] >> (x & 7)) & 1; }
+static inline void pset(uint8_t *r, int x, int v) {
+  if (v) r[x >> 3] |= 1 << (x & 7);
+  else r[x >> 3] &= ~(1 << (x & 7));
+}
+#endif
+
+static void unpack_row(int y) {
+  const uint8_t *r = row_ptr(y);
+  for (int x = 0; x < g_map.w; x++) s_tmp[x] = pget(r, x);
+}
+
+static void clear_all(void) {
+  for (int y = 0; y < g_map.h; y++) memset(row_ptr(y), BG_BYTE, s_bpr);
+}
+
+// rounded (a * n) / 65536 for signed values
+static inline int fmul(int32_t a, int n) {
+  int32_t p = a * n;
+  return p >= 0 ? (p + 32768) >> 16 : -((-p + 32768) >> 16);
+}
+
+// --- Moving the picture in place ---------------------------------------------------
+// Slide by (vx, vy) pixels
+static void op_scroll(int vx, int vy) {
+  int w = g_map.w, h = g_map.h;
+  if (!vx && !vy) return;
+  if (vx >= w || -vx >= w || vy >= h || -vy >= h) { clear_all(); return; }
+  int y0 = vy > 0 ? h - 1 : 0, y1 = vy > 0 ? -1 : h, step = vy > 0 ? -1 : 1;
+  for (int y = y0; y != y1; y += step) {
+    uint8_t *dr = row_ptr(y);
+    int sy = y - vy;
+    if (sy < 0 || sy >= h) { memset(dr, BG_BYTE, s_bpr); continue; }
+    unpack_row(sy);
+    for (int x = 0; x < w; x++) {
+      int sx = x - vx;
+      pset(dr, x, (sx >= 0 && sx < w) ? s_tmp[sx] : BG_PX);
+    }
+  }
+}
+
+static void scale_row(int y, int sy, int k) {
+  int w = g_map.w, cx = w / 2;
+  uint8_t *dr = row_ptr(y);
+  if (sy < 0 || sy >= g_map.h) { memset(dr, BG_BYTE, s_bpr); return; }
+  unpack_row(sy);
+  for (int x = 0; x < w; x++) {
+    int sx = k > 0 ? cx + ((x - cx) >> k) : cx + ((x - cx) << -k);
+    pset(dr, x, (sx >= 0 && sx < w) ? s_tmp[sx] : BG_PX);
+  }
+}
+
+// Zoom by 2^k about the center (k > 0 blows up, k < 0 shrinks)
+static void op_scale(int k) {
+  int h = g_map.h, cy = h / 2;
+  if (!k) return;
+  if (k > 0) {
+    // source rows are nearer the middle: work from the edges inward
+    for (int y = 0; y < cy; y++) scale_row(y, cy + ((y - cy) >> k), k);
+    for (int y = h - 1; y >= cy; y--) scale_row(y, cy + ((y - cy) >> k), k);
+  } else {
+    // source rows are further out: work from the middle outward
+    for (int y = cy - 1; y >= 0; y--) scale_row(y, cy + ((y - cy) << -k), k);
+    for (int y = cy; y < h; y++) scale_row(y, cy + ((y - cy) << -k), k);
+  }
+}
+
+// Each row slides sideways by a * (y - cy)
+static void op_hshear(int32_t a) {
+  int w = g_map.w, h = g_map.h, cy = h / 2;
+  for (int y = 0; y < h; y++) {
+    int s = fmul(a, y - cy);
+    if (!s) continue;
+    uint8_t *dr = row_ptr(y);
+    unpack_row(y);
+    for (int x = 0; x < w; x++) {
+      int sx = x - s;
+      pset(dr, x, (sx >= 0 && sx < w) ? s_tmp[sx] : BG_PX);
+    }
+  }
+}
+
+// Each column slides up/down by b * (x - cx)
+static void op_vshear(int32_t b) {
+  int w = g_map.w, h = g_map.h, cx = w / 2;
+  for (int x = 0; x < w; x++) {
+    int s = fmul(b, x - cx);
+    if (!s) continue;
+    for (int y = 0; y < h; y++) s_tmp[y] = pget(row_ptr(y), x);
+    for (int y = 0; y < h; y++) {
+      int sy = y - s;
+      pset(row_ptr(y), x, (sy >= 0 && sy < h) ? s_tmp[sy] : BG_PX);
+    }
+  }
+}
+
+// Half turn
+static void op_flip(void) {
+  int w = g_map.w, h = g_map.h;
+  for (int ya = 0, yb = h - 1; ya <= yb; ya++, yb--) {
+    uint8_t *ra = row_ptr(ya), *rb = row_ptr(yb);
+    unpack_row(ya);
+    if (ya == yb) {
+      for (int x = 0; x < w; x++) pset(ra, x, s_tmp[w - 1 - x]);
+      break;
+    }
+    for (int x = 0; x < w; x++) pset(ra, x, pget(rb, w - 1 - x));
+    for (int x = 0; x < w; x++) pset(rb, x, s_tmp[w - 1 - x]);
+  }
+}
+
+static int norm_deg(int d) {
+  d %= 360;
+  if (d > 180) d -= 360;
+  if (d <= -180) d += 360;
+  return d;
+}
+
+// Turn by rot degrees clockwise (three shears, done in place)
+static void op_rotate(int rot) {
+  rot = norm_deg(rot);
+  if (rot > 90) { op_flip(); rot -= 180; }
+  else if (rot < -90) { op_flip(); rot += 180; }
+  if (!rot) return;
+  int32_t ang = DEG_TO_TRIGANGLE(rot < 0 ? rot + 360 : rot);
+  int32_t half = ang / 2;
+  int32_t c2 = cos_lookup(half);
+  if (c2 == 0) return;
+  int32_t alpha = -(int32_t)(((int64_t)sin_lookup(half) << 16) / c2);   // -tan(rot/2)
+  int32_t beta = (int32_t)(((int64_t)sin_lookup(ang) << 16) / TRIG_MAX_RATIO);  // sin(rot)
+  op_hshear(alpha);
+  op_vshear(beta);
+  op_hshear(alpha);
+}
+
+static void apply_xform(const MapXform *x) {
+  if (x->k) op_scale(x->k);
+  if (x->rot) op_rotate(x->rot);
+  op_scroll(x->vx, x->vy);
+}
+
+GPoint map_xform_point(const MapXform *x, GPoint p) {
+  int cx = g_map.w / 2, cy = g_map.h / 2;
+  int32_t dx = p.x - cx, dy = p.y - cy;
+  if (x->k > 0) { dx <<= x->k; dy <<= x->k; }
+  else if (x->k < 0) { dx >>= -x->k; dy >>= -x->k; }
+  if (x->rot) {
+    int r = norm_deg(x->rot);
+    int32_t a = DEG_TO_TRIGANGLE(r < 0 ? r + 360 : r);
+    int32_t c = cos_lookup(a), s = sin_lookup(a);
+    int32_t nx = (int32_t)(((int64_t)dx * c - (int64_t)dy * s) / TRIG_MAX_RATIO);
+    int32_t ny = (int32_t)(((int64_t)dx * s + (int64_t)dy * c) / TRIG_MAX_RATIO);
+    dx = nx;
+    dy = ny;
+  }
+  return GPoint(cx + dx + x->vx, cy + dy + x->vy);
+}
+
+// --- The user's moves the phone hasn't drawn yet -------------------------------------
+#define MAX_PANS 8
+typedef struct { int16_t id, dx, dy; } Pan;
+static Pan s_pans[MAX_PANS];
+static int s_npans;
+static int s_pan_id;
 static int s_drag_x, s_drag_y;
+
+static void recompute_shift(void) {
+  int sx = 0, sy = 0;
+  for (int i = 0; i < s_npans; i++) { sx -= s_pans[i].dx; sy -= s_pans[i].dy; }
+  g_map.shift_x = sx;
+  g_map.shift_y = sy;
+}
+
+void map_apply_ack(int ack) {
+  int n = 0;
+  for (int i = 0; i < s_npans; i++) {
+    int behind = (ack - s_pans[i].id + 30000) % 30000;   // 0 .. ack is at or after this move
+    if (behind < 15000) continue;                         // drawn already
+    s_pans[n++] = s_pans[i];
+  }
+  s_npans = n;
+  recompute_shift();
+  notify();
+}
 
 void map_set_drag(int dx, int dy) {
   s_drag_x = dx;
@@ -69,12 +281,50 @@ void map_set_drag(int dx, int dy) {
   notify();
 }
 
+static void notify_xform(const MapXform *x) {
+  if (s_listener) s_listener(x);
+}
+
+// Zoom the picture we have right away (blocky until the sharp one arrives)
+static void prescale(int k) {
+  if (!g_map.bmp || !g_map.ref_valid) return;
+  MapXform x = { .k = k };
+  apply_xform(&x);
+  g_map.chunk_img = -1;   // pieces still on their way belong to the old zoom
+  g_map.rzoom += k;
+  if (k > 0) { g_map.rcx <<= k; g_map.rcy <<= k; }
+  else { g_map.rcx >>= -k; g_map.rcy >>= -k; }
+  for (int i = 0; i < s_npans; i++) {
+    s_pans[i].dx = k > 0 ? s_pans[i].dx << k : s_pans[i].dx / (1 << -k);
+    s_pans[i].dy = k > 0 ? s_pans[i].dy << k : s_pans[i].dy / (1 << -k);
+  }
+  recompute_shift();
+  int fcx = g_map.fw / 2, fcy = g_map.fh / 2;
+  for (int i = 0; i < g_map.n_markers; i++) {
+    Marker *mk = &g_map.markers[i];
+    int dx = mk->x - fcx, dy = mk->y - fcy;
+    mk->x = fcx + (k > 0 ? dx << k : dx / (1 << -k));
+    mk->y = fcy + (k > 0 ? dy << k : dy / (1 << -k));
+  }
+  notify_xform(&x);
+}
+
 void map_adjust(int action, int dx, int dy) {
-  g_map.seq = s_next_seq++;
-  if (s_next_seq > 30000) s_next_seq = 1;
   if (action == ADJ_PAN) {
-    g_map.shift_x -= dx;
-    g_map.shift_y -= dy;
+    s_pan_id = s_pan_id % 30000 + 1;
+    if (s_npans == MAX_PANS) {
+      // fold the oldest move into the next one
+      s_pans[1].dx += s_pans[0].dx;
+      s_pans[1].dy += s_pans[0].dy;
+      memmove(&s_pans[0], &s_pans[1], sizeof(Pan) * (MAX_PANS - 1));
+      s_npans--;
+    }
+    s_pans[s_npans++] = (Pan){ .id = s_pan_id, .dx = dx, .dy = dy };
+    recompute_shift();
+  } else if (action == ADJ_ZOOM_IN) {
+    prescale(1);
+  } else if (action == ADJ_ZOOM_OUT) {
+    prescale(-1);
   }
   OutMsg m;
   comm_msg_init(&m, CMD_MAP_ADJUST);
@@ -82,20 +332,18 @@ void map_adjust(int action, int dx, int dy) {
   m.idx = action;
   m.width = dx;
   m.height = dy;
+  m.num = s_pan_id;
   comm_send(&m);
   notify();
-}
-
-int map_new_seq(void) {
-  g_map.seq = s_next_seq++;
-  if (s_next_seq > 30000) s_next_seq = 1;
-  return g_map.seq;
 }
 
 int map_request(int cmd, int w, int h, int idx, int mode) {
   map_release();
   g_map.n_markers = 0;
-  g_map.shift_x = g_map.shift_y = 0;
+  s_npans = 0;
+  recompute_shift();
+  g_map.fw = w;
+  g_map.fh = h;
   g_map.seq = s_next_seq++;
   if (s_next_seq > 30000) s_next_seq = 1;
   OutMsg m;
@@ -110,57 +358,103 @@ int map_request(int cmd, int w, int h, int idx, int mode) {
   return g_map.seq;
 }
 
+// A new picture is starting: line up what we already have with it
+static void begin(DictionaryIterator *it) {
+  int w = tuple_int(it, MESSAGE_KEY_width, 0);
+  int h = tuple_int(it, MESSAGE_KEY_height, 0);
+  if (w <= 0 || h <= 0) return;
+  map_reserve();
+  if (!s_buf || !s_tmp) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "map buffer missing");
+    return;
+  }
+  if (w > s_buf_size.w) w = s_buf_size.w;
+  if (h > s_buf_size.h) h = s_buf_size.h;
+#ifdef PBL_COLOR
+  const Tuple *pt = dict_find(it, MESSAGE_KEY_palette);
+  if (pt) {
+    int n = pt->length > 16 ? 16 : pt->length;
+    for (int i = 0; i < n; i++) s_palette[i].argb = pt->value->data[i];
+  }
+#endif
+  int id = tuple_int(it, MESSAGE_KEY_img, 0);
+  int ref = tuple_int(it, MESSAGE_KEY_ref, 0);
+  int32_t ncx = tuple_int(it, MESSAGE_KEY_idx, 0), ncy = tuple_int(it, MESSAGE_KEY_mode, 0);
+  int nz = tuple_int(it, MESSAGE_KEY_num, 0), nh = tuple_int(it, MESSAGE_KEY_num2, 0);
+
+  bool keep = false;
+  MapXform x = { 0 };
+  if (g_map.bmp && g_map.ref_valid && w == g_map.w && h == g_map.h) {
+    if (ref && ref == g_map.img_id && nz == g_map.rzoom && nh == g_map.rheading) {
+      // the phone says exactly how far to slide
+      x.vx = tuple_int(it, MESSAGE_KEY_vx, 0);
+      x.vy = tuple_int(it, MESSAGE_KEY_vy, 0);
+      keep = true;
+    } else {
+      int k = nz - g_map.rzoom;
+      if (k >= -3 && k <= 3) {
+        int32_t ocx = k >= 0 ? g_map.rcx << k : g_map.rcx >> -k;
+        int32_t ocy = k >= 0 ? g_map.rcy << k : g_map.rcy >> -k;
+        int32_t dx = ocx - ncx, dy = ocy - ncy;
+        int lim = 2 * (w + h);
+        if (dx > -lim && dx < lim && dy > -lim && dy < lim) {
+          int32_t a = DEG_TO_TRIGANGLE(((nh % 360) + 360) % 360);
+          int32_t c = cos_lookup(a), s = sin_lookup(a);
+          x.k = k;
+          x.rot = norm_deg(g_map.rheading - nh);
+          x.vx = (int)(((int64_t)dx * c + (int64_t)dy * s) / TRIG_MAX_RATIO);
+          x.vy = (int)((-(int64_t)dx * s + (int64_t)dy * c) / TRIG_MAX_RATIO);
+          keep = true;
+        }
+      }
+    }
+  }
+  gbitmap_set_bounds(s_buf, GRect(0, 0, w, h));
+  g_map.bmp = s_buf;
+  g_map.w = w;
+  g_map.h = h;
+  if (keep) {
+    apply_xform(&x);
+    g_map.img_id = id;
+    g_map.rcx = ncx;
+    g_map.rcy = ncy;
+    g_map.rzoom = nz;
+    g_map.rheading = nh;
+    notify_xform(&x);
+  } else {
+    clear_all();
+  }
+  g_map.img_id = id;
+  g_map.chunk_img = id;
+  g_map.rcx = ncx;
+  g_map.rcy = ncy;
+  g_map.rzoom = nz;
+  g_map.rheading = nh;
+  g_map.ref_valid = true;
+  if (dict_find(it, MESSAGE_KEY_ack)) map_apply_ack(tuple_int(it, MESSAGE_KEY_ack, 0));
+}
+
 void map_handle(int cmd, DictionaryIterator *it) {
   int seq = tuple_int(it, MESSAGE_KEY_seq, -1);
-  if (seq != g_map.seq) return;  // stale
+  if (seq != g_map.seq) return;  // another screen's picture
   if (cmd == CMD_MAP_BEGIN) {
-    map_release();
-    g_map.shift_x = g_map.shift_y = 0;
-    int w = tuple_int(it, MESSAGE_KEY_width, 0);
-    int h = tuple_int(it, MESSAGE_KEY_height, 0);
-    int fmt = tuple_int(it, MESSAGE_KEY_fmt, FMT_4BIT);
-    if (w <= 0 || h <= 0) return;
-    (void)fmt;
-    map_reserve();
-    if (!s_buf) {
-      APP_LOG(APP_LOG_LEVEL_ERROR, "map buffer missing");
-      return;
-    }
-    if (w > s_buf_size.w) w = s_buf_size.w;
-    if (h > s_buf_size.h) h = s_buf_size.h;
-#ifdef PBL_COLOR
-    const Tuple *pt = dict_find(it, MESSAGE_KEY_palette);
-    memset(s_palette, 0xFF, sizeof(s_palette));
-    if (pt) {
-      int n = pt->length > 16 ? 16 : pt->length;
-      for (int i = 0; i < n; i++) s_palette[i].argb = pt->value->data[i];
-    }
-#endif
-    gbitmap_set_bounds(s_buf, GRect(0, 0, w, h));
-    g_map.bmp = s_buf;
-    g_map.w = w;
-    g_map.h = h;
-    g_map.stride = tuple_int(it, MESSAGE_KEY_stride, gbitmap_get_bytes_per_row(g_map.bmp));
-    g_map.total = tuple_int(it, MESSAGE_KEY_total, 0);
-    g_map.got = 0;
-    g_map.complete = false;
+    begin(it);
+    notify();
   } else if (cmd == CMD_MAP_CHUNK) {
-    if (!g_map.bmp) return;
+    // a block of rows: starting at row `offset`, byte `num`, `stride` bytes per row
+    if (!g_map.bmp || tuple_int(it, MESSAGE_KEY_img, -2) != g_map.chunk_img) return;
     const Tuple *dt = dict_find(it, MESSAGE_KEY_data);
     if (!dt) return;
-    int off = tuple_int(it, MESSAGE_KEY_offset, 0);
-    int bpr = gbitmap_get_bytes_per_row(g_map.bmp);
-    uint8_t *dst = gbitmap_get_data(g_map.bmp);
-    int stride = g_map.stride > 0 ? g_map.stride : bpr;
-    int copy = stride < bpr ? stride : bpr;
+    int y = tuple_int(it, MESSAGE_KEY_offset, 0);
+    int xb = tuple_int(it, MESSAGE_KEY_num, 0);
+    int stride = tuple_int(it, MESSAGE_KEY_stride, s_bpr);
+    if (stride <= 0 || xb < 0 || xb >= s_bpr || y < 0) return;
+    int copy = stride < s_bpr - xb ? stride : s_bpr - xb;
     const uint8_t *src = dt->value->data;
-    int len = dt->length;
-    int row = off / stride;
-    for (int p = 0; p + stride <= len && row < g_map.h; p += stride, row++) {
-      memcpy(dst + row * bpr, src + p, copy);
+    for (int p = 0; p + stride <= dt->length && y < g_map.h; p += stride, y++) {
+      memcpy(row_ptr(y) + xb, src + p, copy);
     }
-    g_map.got += len;
-    if (g_map.got >= g_map.total) g_map.complete = true;
+    g_map.complete = true;
     notify();
   } else if (cmd == CMD_MARKERS) {
     const Tuple *dt = dict_find(it, MESSAGE_KEY_data);
@@ -207,19 +501,16 @@ int map_pin_near(GPoint p, GRect frame, int max_dist) {
 
 void map_draw(GContext *ctx, GRect frame, int selected) {
   int sx = g_map.shift_x + s_drag_x, sy = g_map.shift_y + s_drag_y;
-  if (sx || sy) draw_map_placeholder(ctx, frame);
   if (g_map.bmp) {
     GRect r = GRect(frame.origin.x + (frame.size.w - g_map.w) / 2 + sx,
                     frame.origin.y + (frame.size.h - g_map.h) / 2 + sy, g_map.w, g_map.h);
+    // only the strips the picture doesn't cover get the "loading" look
+    if (r.origin.x > frame.origin.x || r.origin.y > frame.origin.y ||
+        r.origin.x + r.size.w < frame.origin.x + frame.size.w || r.origin.y + r.size.h < frame.origin.y + frame.size.h) {
+      draw_map_placeholder(ctx, frame);
+    }
     graphics_context_set_compositing_mode(ctx, GCompOpAssign);
     graphics_draw_bitmap_in_rect(ctx, g_map.bmp, r);
-    // rows not yet received: keep placeholder look
-    if (!g_map.complete && g_map.stride > 0) {
-      int rows = g_map.got / g_map.stride;
-      if (rows < g_map.h) {
-        draw_map_placeholder(ctx, GRect(r.origin.x, r.origin.y + rows, r.size.w, r.size.h - rows));
-      }
-    }
   } else {
     draw_map_placeholder(ctx, frame);
   }
