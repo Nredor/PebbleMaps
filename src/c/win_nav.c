@@ -302,9 +302,12 @@ static void end_nav(void) {
   window_stack_remove(s_window, true);
 }
 
+static void set_overview(bool on);
+
 static void recenter_if_moved(void) {
   if (s_moved) {
     s_moved = false;
+    set_overview(false);
     map_adjust(ADJ_RESET, 0, 0);
   }
 }
@@ -333,11 +336,24 @@ static void menu_open(void) {
   layer_mark_dirty(s_canvas);
 }
 
+// While showing the whole route, the "my location" button becomes "back to navigation"
+static void set_overview(bool on) {
+  s_bar.extra_up = on ? ICON_TRIANGLE : ICON_MYLOC;
+}
+
 static void bar_cb(MapBarEvent ev, void *ctx) {
   switch (ev) {
     case MB_EV_MOVED: s_moved = true; break;
-    case MB_EV_EXTRA_UP: s_moved = false; map_adjust(ADJ_RESET, 0, 0); break;
-    case MB_EV_EXTRA_DOWN: s_moved = true; map_adjust(ADJ_FIT_ROUTE, 0, 0); break;
+    case MB_EV_EXTRA_UP:
+      s_moved = false;
+      set_overview(false);
+      map_adjust(ADJ_RESET, 0, 0);
+      break;
+    case MB_EV_EXTRA_DOWN:
+      s_moved = true;
+      set_overview(true);
+      map_adjust(ADJ_FIT_ROUTE, 0, 0);
+      break;
     case MB_EV_CLOSED: menu_close(); break;
   }
   if (s_canvas) layer_mark_dirty(s_canvas);

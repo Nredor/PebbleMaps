@@ -116,9 +116,9 @@ function stepList(route, imperial) {
     var sub = fmt.distance(s.meters || (s.endDist - s.startDist), imperial);
     if (s.transit) {
       sub = (s.transit.departs ? s.transit.departs + ' · ' : '') + s.transit.stops + ' stops';
-      return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 58), sub: sub, icon: s.man };
+      return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 120), sub: sub, icon: s.man };
     }
-    return { title: fmt.clip(s.instruction, 58), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
+    return { title: fmt.clip(s.instruction, 120), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
   });
 }
 

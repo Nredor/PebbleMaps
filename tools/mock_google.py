@@ -212,6 +212,11 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {"status": "OK", "results": [{"formatted_address": "421 W Riverside Ave, Spokane, WA 99201, USA", "place_id": "mock-here"}]})
             return self.send(200, {"status": "OK", "results": [{"formatted_address": q["address"][0] + ", Spokane, WA", "place_id": "mock-geo",
                                                                  "geometry": {"location": {"lat": 47.6512, "lng": -117.4145}}}]})
+        if "/places/" in u.path:
+            pid = urllib.parse.unquote(u.path.rsplit("/", 1)[1])
+            for p in PLACES:
+                if "mock-" + p[0].lower().replace(" ", "-") == pid:
+                    return self.send(200, place_json(p))
         self.send(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
@@ -221,6 +226,13 @@ class H(BaseHTTPRequestHandler):
             text = body.get("textQuery", "").lower()
             res = [p for p in PLACES if any(w in p[0].lower() or w in p[1].lower() for w in text.split())] or PLACES[:5]
             return self.send(200, {"places": [place_json(p) for p in res]})
+        if self.path.endswith("places:autocomplete"):
+            text = body.get("input", "").lower()
+            res = [p for p in PLACES if p[0].lower().startswith(text) or any(w.startswith(text) for w in p[0].lower().split())]
+            return self.send(200, {"suggestions": [{"placePrediction": {
+                "placeId": "mock-" + p[0].lower().replace(" ", "-"),
+                "structuredFormat": {"mainText": {"text": p[0]}, "secondaryText": {"text": "W Main Ave, Spokane, WA"}},
+                "distanceMeters": 400 + 300 * i}} for i, p in enumerate(res[:5])]})
         if self.path.endswith("places:searchNearby"):
             return self.send(200, {"places": [place_json(p) for p in PLACES[:6]]})
         if self.path.endswith("computeRoutes"):

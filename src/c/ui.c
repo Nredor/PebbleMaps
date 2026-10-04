@@ -77,6 +77,17 @@ static void line(GContext *ctx, int x1, int y1, int x2, int y2) {
   graphics_draw_line(ctx, P(x1, y1), P(x2, y2));
 }
 
+// Exactly 2 px wide, crisp: two 1 px lines side by side
+static void line2(GContext *ctx, int x1, int y1, int x2, int y2) {
+  GPoint a = P(x1, y1), b = P(x2, y2);
+  int dx = b.x - a.x, dy = b.y - a.y;
+  bool flat = (dx < 0 ? -dx : dx) >= (dy < 0 ? -dy : dy);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, a, b);
+  if (flat) graphics_draw_line(ctx, GPoint(a.x, a.y + 1), GPoint(b.x, b.y + 1));
+  else graphics_draw_line(ctx, GPoint(a.x + 1, a.y), GPoint(b.x + 1, b.y));
+}
+
 static void poly(GContext *ctx, const int8_t *xy, int n, bool fill) {
   GPoint pts[12];
   if (n > 12) n = 12;
@@ -124,8 +135,8 @@ IconId icon_for_mode(int mode) {
 void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor bg) {
   s_c = c;
   s_sz = size;
-  int sw = size / 10;
-  if (sw < 1) sw = 1;
+  // every line icon uses the same 2 px stroke (1 px only on tiny icons)
+  int sw = size >= 14 ? 2 : 1;
 #ifdef PBL_COLOR
   graphics_context_set_antialiased(ctx, true);
 #endif
@@ -162,7 +173,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
         graphics_context_set_stroke_width(ctx, 1);
         gpath_draw_outline(ctx, &path);
       } else {
-        graphics_context_set_stroke_width(ctx, size >= 20 ? 2 : 1);
+        graphics_context_set_stroke_width(ctx, sw);
         gpath_draw_outline(ctx, &path);
       }
       break;
@@ -181,7 +192,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       poly(ctx, dia, 4, true);
       graphics_context_set_stroke_color(ctx, bg);
       graphics_context_set_fill_color(ctx, bg);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 14, 28, 14, 20);
       line(ctx, 14, 20, 24, 20);
       static const int8_t head[] = {23, 14, 30, 20, 23, 26};
@@ -195,6 +206,11 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
         line(ctx, 14, 10 + i * 10, 35, 10 + i * 10);
       }
       break;
+    case ICON_TRIANGLE: {
+      static const int8_t tri[] = {20, 6, 35, 33, 5, 33};
+      poly(ctx, tri, 3, true);
+      break;
+    }
     case ICON_NAV: {
       static const int8_t arrow[] = {20, 3, 34, 36, 20, 28, 6, 36};
       poly(ctx, arrow, 4, true);
@@ -228,12 +244,12 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       break;
     }
     case ICON_SEARCH:
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       circle(ctx, 17, 17, 11, false);
       line(ctx, 25, 25, 35, 35);
       break;
     case ICON_PLUS:
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 20, 6, 20, 34);
       line(ctx, 6, 20, 34, 20);
       break;
@@ -252,7 +268,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
     }
     case ICON_WALK:
       circle(ctx, 22, 6, 4, true);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 21, 12, 17, 24);
       line(ctx, 17, 24, 11, 36);
       line(ctx, 17, 24, 23, 29);
@@ -307,7 +323,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       poly(ctx, tri, 3, true);
       graphics_context_set_stroke_color(ctx, bg);
       graphics_context_set_fill_color(ctx, bg);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 20, 14, 20, 25);
       circle(ctx, 20, 31, 2, true);
       break;
@@ -320,7 +336,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       break;
     case ICON_COFFEE:
       rect(ctx, 7, 14, 27, 35, 4);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       circle(ctx, 29, 22, 5, false);
       graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 12, 4, 12, 10);
@@ -328,7 +344,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 22, 4, 22, 10);
       break;
     case ICON_FOOD: {
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 13, 4, 13, 37);
       graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 8, 4, 8, 14);
@@ -336,13 +352,13 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 8, 14, 18, 14);
       static const int8_t blade[] = {26, 3, 32, 7, 32, 22, 26, 22};
       poly(ctx, blade, 4, true);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 27, 22, 27, 37);
       break;
     }
     case ICON_GAS:
       rect(ctx, 7, 5, 24, 37, 2);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 24, 13, 31, 18);
       line(ctx, 31, 18, 31, 31);
       line(ctx, 31, 31, 35, 31);
@@ -350,7 +366,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       rect(ctx, 10, 9, 21, 17, 0);
       break;
     case ICON_CART: {
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 3, 7, 9, 7);
       line(ctx, 9, 7, 13, 27);
       line(ctx, 13, 27, 33, 27);
@@ -408,15 +424,15 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       break;
     }
     case ICON_CLOSE:
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 8, 8, 32, 32);
       line(ctx, 32, 8, 8, 32);
       break;
     case ICON_ZOOM_IN:
     case ICON_ZOOM_OUT:
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       circle(ctx, 16, 16, 12, false);
-      graphics_context_set_stroke_width(ctx, sw + 2);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 25, 25, 36, 36);
       graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 10, 16, 22, 16);
@@ -465,27 +481,27 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       circle(ctx, 20, 20, 4, true);
       if (id == ICON_EYE_OFF) {
         graphics_context_set_stroke_color(ctx, bg);
-        graphics_context_set_stroke_width(ctx, sw + 3);
+        graphics_context_set_stroke_width(ctx, sw + 2);
         line(ctx, 6, 35, 34, 5);
         graphics_context_set_stroke_color(ctx, fg);
-        graphics_context_set_stroke_width(ctx, sw + 1);
+        graphics_context_set_stroke_width(ctx, sw);
         line(ctx, 6, 35, 34, 5);
       }
       break;
     }
     case ICON_NORTH: {
       // compass needle: dark tip north, hollow tail south, inside a ring
-      graphics_context_set_stroke_width(ctx, sw > 1 ? sw - 1 : 1);
+      graphics_context_set_stroke_width(ctx, sw);
       circle(ctx, 20, 20, 18, false);
       static const int8_t tip[] = {20, 4, 26, 20, 14, 20};
       static const int8_t tail[] = {14, 20, 26, 20, 20, 36};
       poly(ctx, tip, 3, true);
-      graphics_context_set_stroke_width(ctx, 1);
+      graphics_context_set_stroke_width(ctx, sw);
       poly(ctx, tail, 3, false);
       break;
     }
     case ICON_HEADING: {
-      graphics_context_set_stroke_width(ctx, sw > 1 ? sw - 1 : 1);
+      graphics_context_set_stroke_width(ctx, sw);
       circle(ctx, 20, 20, 18, false);
       static const int8_t arrow[] = {20, 7, 30, 31, 20, 25, 10, 31};
       poly(ctx, arrow, 4, true);
@@ -494,25 +510,29 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
     case ICON_STOP:
       circle(ctx, 20, 20, 18, true);
       graphics_context_set_stroke_color(ctx, bg);
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       line(ctx, 13, 13, 27, 27);
       line(ctx, 27, 13, 13, 27);
       break;
     case ICON_MAP: {
-      // folded paper map, drawn as an outline like the other icons
-      static const int8_t m[] = {4, 9, 14, 5, 26, 9, 36, 5, 36, 31, 26, 35, 14, 31, 4, 35};
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      // folded paper map: crisp 2 px outline and folds
+#ifdef PBL_COLOR
+      graphics_context_set_antialiased(ctx, false);
+#endif
+      static const int8_t m[] = {4, 11, 14, 5, 26, 11, 36, 5, 36, 30, 26, 36, 14, 30, 4, 36};
       for (int i = 0; i < 8; i++) {
         int j = (i + 1) % 8;
-        line(ctx, m[2 * i], m[2 * i + 1], m[2 * j], m[2 * j + 1]);
+        line2(ctx, m[2 * i], m[2 * i + 1], m[2 * j], m[2 * j + 1]);
       }
-      graphics_context_set_stroke_width(ctx, sw);
-      line(ctx, 14, 5, 14, 31);
-      line(ctx, 26, 9, 26, 35);
+      line2(ctx, 14, 5, 14, 30);
+      line2(ctx, 26, 11, 26, 36);
+#ifdef PBL_COLOR
+      graphics_context_set_antialiased(ctx, true);
+#endif
       break;
     }
     case ICON_KEY:
-      graphics_context_set_stroke_width(ctx, sw + 1);
+      graphics_context_set_stroke_width(ctx, sw);
       circle(ctx, 12, 20, 8, false);
       line(ctx, 20, 20, 37, 20);
       line(ctx, 31, 20, 31, 27);

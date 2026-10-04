@@ -217,6 +217,52 @@ function searchNearby(category, loc, cb) {
   });
 }
 
+// Suggestions while typing (Places Autocomplete), nearest first.
+// Uses a session token so the typing plus the final pick are billed as one lookup.
+function autocomplete(input, loc, token, cb) {
+  var body = { input: input, languageCode: config.language, includeQueryPredictions: false };
+  if (token) body.sessionToken = token;
+  if (loc) {
+    body.locationBias = { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: 30000 } };
+    body.origin = { latitude: loc[0], longitude: loc[1] };
+  }
+  var mask = 'suggestions.placePrediction.placeId,suggestions.placePrediction.structuredFormat,' +
+             'suggestions.placePrediction.text,suggestions.placePrediction.distanceMeters';
+  postJSON('places', '/v1/places:autocomplete', mask, body, 'Places API', function (err, j) {
+    if (err) return cb(err);
+    var out = [];
+    (j.suggestions || []).forEach(function (sg) {
+      var p = sg.placePrediction;
+      if (!p || !p.placeId) return;
+      var sf = p.structuredFormat || {};
+      out.push({
+        placeId: p.placeId,
+        name: (sf.mainText && sf.mainText.text) || (p.text && p.text.text) || '',
+        address: (sf.secondaryText && sf.secondaryText.text) || '',
+        distance: p.distanceMeters
+      });
+    });
+    cb(null, out);
+  });
+}
+
+// Full details (location, address) for one place
+function placeDetails(placeId, token, cb) {
+  var path = '/v1/places/' + encodeURIComponent(placeId) + (token ? '?sessionToken=' + encodeURIComponent(token) : '');
+  request({
+    url: url('places', path),
+    headers: {
+      'X-Goog-Api-Key': config.key,
+      'X-Goog-FieldMask': 'id,displayName,formattedAddress,shortFormattedAddress,location,primaryTypeDisplayName'
+    }
+  }, function (err, text) {
+    if (err) return cb(friendlyError(err.status, err.body, 'Places API'));
+    var j;
+    try { j = JSON.parse(text); } catch (e) { return cb(friendlyError(500, 'Bad response', 'Places API')); }
+    cb(null, placeFrom(j));
+  });
+}
+
 // --- Geocoding API --------------------------------------------------------
 function geocode(address, cb) {
   getJSON('maps', '/maps/api/geocode/json?address=' + encodeURIComponent(address) +
@@ -394,6 +440,8 @@ function checkKey(loc, cb) {
 }
 
 module.exports = {
+  autocomplete: autocomplete,
+  placeDetails: placeDetails,
   setKey: setKey,
   hasKey: hasKey,
   isTest: isTest,

@@ -24,6 +24,7 @@ typedef struct ListWin {
   struct ListWin *next;
   ActionMenuLevel *am_root, *am_modes;
   int am_index;
+  char mode_sub[MODE_COUNT + 1][36];   // travel-time lines for the mode pickers
 } ListWin;
 
 static const char *title_for(ListKind k) {
@@ -55,8 +56,9 @@ static void fill_modes(ListWin *lw) {
   for (int i = 0; i < MODE_COUNT; i++) {
     ListItem *it = &lw->items[i];
     memset(it, 0, sizeof(*it));
-    strncpy(it->title, mode_name(i), ITEM_TITLE_LEN - 1);
-    strncpy(it->sub, lw->kind == LW_MODES ? "Checking..." : "", ITEM_SUB_LEN - 1);
+    it->title = mode_name(i);
+    strncpy(lw->mode_sub[i], lw->kind == LW_MODES ? "Checking..." : "", sizeof(lw->mode_sub[i]) - 1);
+    it->sub = lw->mode_sub[i];
     it->icon = icon_for_mode(i);
     it->extra = (i == lw->arg) ? 1 : 0;
   }
@@ -64,8 +66,9 @@ static void fill_modes(ListWin *lw) {
     // extra row 0: "Use app default"
     for (int i = MODE_COUNT; i > 0; i--) lw->items[i] = lw->items[i - 1];
     memset(&lw->items[0], 0, sizeof(ListItem));
-    strncpy(lw->items[0].title, "App default", ITEM_TITLE_LEN - 1);
-    snprintf(lw->items[0].sub, ITEM_SUB_LEN, "Currently %s", mode_name(g_app.default_mode));
+    lw->items[0].title = "App default";
+    snprintf(lw->mode_sub[MODE_COUNT], sizeof(lw->mode_sub[0]), "Currently %s", mode_name(g_app.default_mode));
+    lw->items[0].sub = lw->mode_sub[MODE_COUNT];
     lw->items[0].icon = ICON_NAV;
     lw->count = MODE_COUNT + 1;
   }
@@ -105,11 +108,12 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
         lw->items2 = alloc_list(packed, MAX_RECENTS, &lw->count2);
         lw->loaded = true;
       } else if (lw->kind == LW_MODES && kind == LIST_MODES) {
-        ListItem tmp[MODE_COUNT];
-        int n = parse_list(packed, tmp, MODE_COUNT);
+        int n = 0;
+        ListItem *tmp = alloc_list(packed, MODE_COUNT, &n);
         for (int i = 0; i < n && i < MODE_COUNT; i++) {
-          strncpy(lw->items[i].sub, tmp[i].sub, ITEM_SUB_LEN - 1);
+          strncpy(lw->mode_sub[i], tmp[i].sub, sizeof(lw->mode_sub[i]) - 1);
         }
+        free(tmp);
         lw->loaded = true;
       } else if (lw->kind == LW_STEPS && kind == LIST_STEPS) {
         free(lw->items);
@@ -131,7 +135,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       lw->loaded = true;
       if (lw->kind == LW_MODES) {
         // keep the picker usable even if times failed
-        for (int i = 0; i < MODE_COUNT; i++) lw->items[i].sub[0] = 0;
+        for (int i = 0; i < MODE_COUNT; i++) lw->mode_sub[i][0] = 0;
         menu_layer_reload_data(lw->menu);
       } else {
         show_error(it);

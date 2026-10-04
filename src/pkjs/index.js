@@ -76,8 +76,17 @@ function sendError(err, fallbackCode) {
 function sendBusy(text) { send({ cmd: CMD.BUSY, text: text }); }
 function toast(text) { send({ cmd: CMD.TOAST, text: fmt.clip(text, 60) }); }
 
+function utf8Len(str) { return unescape(encodeURIComponent(str)).length; }
+
+// Fit the list into one message for this watch (drops items from the end if needed)
 function sendList(kind, items) {
-  send({ cmd: CMD.LIST, num: kind, list: fmt.packList(items) || '' });
+  var packed = fmt.packList(items) || '';
+  var room = watch.inbox - 80;
+  while (items.length > 1 && utf8Len(packed) > room) {
+    items = items.slice(0, items.length - 1);
+    packed = fmt.packList(items);
+  }
+  send({ cmd: CMD.LIST, num: kind, list: packed });
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +423,41 @@ function onSearch(p) {
   });
 }
 
+// --- Suggestions while typing on the watch keyboard ------------------------
+var suggestions = [];
+var acToken = null, acTokenTime = 0;
+
+function newToken() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (ch) {
+    var r = Math.random() * 16 | 0;
+    return (ch === 'x' ? r : (r & 3 | 8)).toString(16);
+  });
+}
+
+function onAutocomplete(p) {
+  if (!google.hasKey()) return;
+  var text = String(p.text || '').trim();
+  var reqId = p.idx || 0;
+  if (!text) return;
+  if (!acToken || p.mode === 1 || Date.now() - acTokenTime > 170000) {
+    acToken = newToken();
+    acTokenTime = Date.now();
+  }
+  getLocation(120000, function (err, loc) {
+    google.autocomplete(text, err ? null : loc, acToken, function (e2, list) {
+      if (e2) { console.log('autocomplete: ' + (e2.text || e2.title)); list = []; }
+      suggestions = list.slice(0, 5);
+      var items = suggestions.map(function (sg) {
+        var bits = [];
+        if (sg.distance !== undefined) bits.push(fmt.distance(sg.distance, S.imperial));
+        if (sg.address) bits.push(sg.address);
+        return { title: fmt.clip(sg.name, 46), sub: fmt.clip(bits.join(' · '), 62) };
+      });
+      send({ cmd: CMD.LIST, num: P.LIST.SUGGEST, idx: reqId, list: fmt.packList(items) || '' });
+    });
+  });
+}
+
 function onNearby(p) {
   if (needKey()) return;
   var cat = P.CATEGORIES[p.idx] || P.CATEGORIES[0];
@@ -455,6 +499,20 @@ function withDest(cb) {
     var w = destWaiters;
     destWaiters = null;
     w.forEach(function (fn) { fn(err, err ? null : target); });
+  }
+  if (target.fromSuggest && target.placeId) {
+    // a place picked from the typing suggestions: ask Google where it is
+    var token = acToken;
+    acToken = null;
+    return google.placeDetails(target.placeId, token, function (e0, pl) {
+      if (e0 || !pl || pl.lat === undefined) return finish(e0 || { code: P.ERR.NO_RESULTS, text: 'Couldn\'t find that place.' });
+      target.lat = pl.lat;
+      target.lng = pl.lng;
+      target.fullAddress = pl.fullAddress;
+      target.type = pl.type;
+      if (pl.name) target.name = pl.name;
+      finish(null);
+    });
   }
   google.geocode(target.address || target.name, function (err, g) {
     if (!err && g) {
@@ -516,6 +574,10 @@ function onSelect(p) {
       if (f.lat === undefined || f.lat === null || f.lat === '') { d.lat = undefined; d.lng = undefined; }
     }
   } else if (src === P.SRC.RECENTS) d = settings.recents()[idx];
+  else if (src === P.SRC.SUGGEST && suggestions[idx]) {
+    var sg = suggestions[idx];
+    d = { name: sg.name, address: sg.address, placeId: sg.placeId, fromSuggest: true };
+  }
   if (!d) return sendError({ code: P.ERR.API, text: 'That place is no longer available.' });
   dest = d;
   route = null;
@@ -948,6 +1010,7 @@ function onMessage(e) {
       case CMD.HOME_MAP: wimg = null; onHomeMap(p); break;
       case CMD.SEARCH: onSearch(p); break;
       case CMD.NEARBY: onNearby(p); break;
+      case CMD.AUTOCOMPLETE: onAutocomplete(p); break;
       case CMD.RESULTS_MAP: wimg = null; onResultsMap(p); break;
       case CMD.SELECT: onSelect(p); break;
       case CMD.PLACE_MAP: wimg = null; onPlaceMap(p); break;

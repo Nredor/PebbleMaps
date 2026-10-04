@@ -41,47 +41,48 @@ int count_list(const char *packed) {
   return n;
 }
 
+// One memory block: the items, followed by their text
 ListItem *alloc_list(const char *packed, int max, int *count) {
   int n = count_list(packed);
   if (n > max) n = max;
   *count = 0;
   if (n == 0) return NULL;
-  ListItem *items = calloc(n, sizeof(ListItem));
+  size_t text = strlen(packed) + 2 * n + 2;
+  ListItem *items = calloc(1, n * sizeof(ListItem) + text);
   if (!items) return NULL;
-  *count = parse_list(packed, items, n);
-  return items;
-}
-
-int parse_list(const char *packed, ListItem *items, int max) {
-  int n = 0;
+  char *blob = (char *)(items + n);
   const char *p = packed;
-  while (*p && n < max) {
-    ListItem *it = &items[n];
-    memset(it, 0, sizeof(*it));
+  int k = 0;
+  while (*p && k < n) {
+    ListItem *it = &items[k];
     int field = 0;
     char num[6] = {0};
-    int ti = 0, si = 0, ni = 0;
+    int ni = 0;
+    it->title = blob;
+    it->sub = "";
     while (*p && *p != 0x1E) {
       if (*p == 0x1F) {
-        if (field == 2) it->icon = atoi(num);
+        if (field == 0) { *blob++ = 0; it->sub = blob; }
+        else if (field == 1) *blob++ = 0;
+        else if (field == 2) it->icon = atoi(num);
         field++;
         memset(num, 0, sizeof(num));
         ni = 0;
-      } else if (field == 0) {
-        if (ti < ITEM_TITLE_LEN - 1) it->title[ti++] = *p;
-      } else if (field == 1) {
-        if (si < ITEM_SUB_LEN - 1) it->sub[si++] = *p;
-      } else {
-        if (ni < 5) num[ni++] = *p;
+      } else if (field <= 1) {
+        *blob++ = *p;
+      } else if (ni < 5) {
+        num[ni++] = *p;
       }
       p++;
     }
+    if (field <= 1) *blob++ = 0;
     if (field == 2) it->icon = atoi(num);
     else if (field == 3) it->extra = atoi(num);
-    n++;
+    k++;
     if (*p == 0x1E) p++;
   }
-  return n;
+  *count = k;
+  return items;
 }
 
 static void init(void) {

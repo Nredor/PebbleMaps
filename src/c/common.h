@@ -29,6 +29,7 @@ enum {
   CMD_CANCEL = 20,
   CMD_MAP_ADJUST = 21,
   CMD_NAV_VIEW = 22,
+  CMD_AUTOCOMPLETE = 23,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,
@@ -48,10 +49,10 @@ enum { MODE_DRIVE = 0, MODE_WALK = 1, MODE_BIKE = 2, MODE_TRANSIT = 3, MODE_COUN
 #define MODE_USE_DEFAULT 9
 
 // List kinds
-enum { LIST_RESULTS = 0, LIST_FAVS = 1, LIST_STEPS = 2, LIST_MODES = 3, LIST_RECENTS = 4 };
+enum { LIST_RESULTS = 0, LIST_FAVS = 1, LIST_STEPS = 2, LIST_MODES = 3, LIST_RECENTS = 4, LIST_SUGGEST = 5 };
 
 // Destination sources for CMD_SELECT
-enum { SRC_RESULTS = 0, SRC_FAVS = 1, SRC_RECENTS = 2 };
+enum { SRC_RESULTS = 0, SRC_FAVS = 1, SRC_RECENTS = 2, SRC_SUGGEST = 3 };
 
 // Error codes
 enum { ERR_NO_KEY = 1, ERR_NO_LOCATION = 2, ERR_API = 3, ERR_NETWORK = 4, ERR_NO_RESULTS = 5 };
@@ -83,12 +84,11 @@ enum { ADJ_ZOOM_IN = 0, ADJ_ZOOM_OUT = 1, ADJ_PAN = 2, ADJ_RESET = 3, ADJ_FIT_RO
 // Marker kinds
 enum { MK_ME = 0, MK_PIN = 1, MK_START = 2, MK_DEST = 3 };
 
-// List item (shared by all list windows)
-#define ITEM_TITLE_LEN 48
-#define ITEM_SUB_LEN 64
+// List item (shared by all list windows). The text lives in the same memory
+// block as the list (see alloc_list), so items are as long as they need to be.
 typedef struct {
-  char title[ITEM_TITLE_LEN];
-  char sub[ITEM_SUB_LEN];
+  const char *title;
+  const char *sub;
   uint8_t icon;   // icon or maneuver/mode code
   uint8_t extra;  // e.g. mode for favorites
 } ListItem;

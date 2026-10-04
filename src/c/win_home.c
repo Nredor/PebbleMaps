@@ -162,9 +162,45 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
 }
 
-static void typed_search(const char *text, void *ctx) {
-  results_window_push_search(text);
+#if KEYBOARD_AVAILABLE
+// --- Typing a search (touch keyboard with suggestions from Google) ---------------
+static int s_ac_id;
+static bool s_ac_new_session;
+
+static void kb_background(GContext *ctx, GRect b, void *c) { map_draw(ctx, map_frame(b), -1); }
+
+static void kb_handler(int cmd, DictionaryIterator *it, void *ctx) {
+  if (cmd != CMD_LIST || tuple_int(it, MESSAGE_KEY_num, -1) != LIST_SUGGEST) return;
+  if (tuple_int(it, MESSAGE_KEY_idx, 0) != s_ac_id) return;   // answer to older typing
+  int n = 0;
+  ListItem *items = alloc_list(tuple_str(it, MESSAGE_KEY_list), 5, &n);
+  keyboard_set_suggestions(items, n);
 }
+
+static void kb_appear(void *c) { comm_set_handler(kb_handler, NULL); }
+
+static void kb_changed(const char *text, void *c) {
+  s_ac_id = s_ac_id % 30000 + 1;
+  if (strlen(text) < 2) return;
+  OutMsg m;
+  comm_msg_init(&m, CMD_AUTOCOMPLETE);
+  m.idx = s_ac_id;
+  if (s_ac_new_session) { m.mode = 1; s_ac_new_session = false; }
+  strncpy(m.text, text, sizeof(m.text) - 1);
+  comm_send(&m);
+}
+
+static void kb_pick(int i, const char *title, void *c) { place_window_push(SRC_SUGGEST, i, title); }
+static void kb_done(const char *text, void *c) { results_window_push_search(text); }
+
+static void open_keyboard(void) {
+  static const KeyboardHooks hooks = {
+    .background = kb_background, .appear = kb_appear, .changed = kb_changed, .pick = kb_pick, .done = kb_done,
+  };
+  s_ac_new_session = true;
+  keyboard_window_push("Search here", "Search", &hooks, NULL);
+}
+#endif
 
 // --- Dictation -------------------------------------------------------------
 static void dictation_cb(DictationSession *session, DictationSessionStatus status,
@@ -262,7 +298,7 @@ static void map_tap(GPoint p, void *ctx) {
   if (s_bar.open || p.y >= g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0)) return;
 #if KEYBOARD_AVAILABLE
   if (!g_app.configured) { show_setup(); return; }
-  keyboard_window_push("Search for a place", "Search", typed_search, NULL);
+  open_keyboard();
 #else
   press(BUTTON_ID_SELECT);
 #endif
