@@ -34,6 +34,24 @@ const char *mode_name(int mode) {
   }
 }
 
+int count_list(const char *packed) {
+  if (!packed || !*packed) return 0;
+  int n = 1;
+  for (const char *p = packed; *p; p++) if (*p == 0x1E) n++;
+  return n;
+}
+
+ListItem *alloc_list(const char *packed, int max, int *count) {
+  int n = count_list(packed);
+  if (n > max) n = max;
+  *count = 0;
+  if (n == 0) return NULL;
+  ListItem *items = calloc(n, sizeof(ListItem));
+  if (!items) return NULL;
+  *count = parse_list(packed, items, n);
+  return items;
+}
+
 int parse_list(const char *packed, ListItem *items, int max) {
   int n = 0;
   const char *p = packed;
@@ -77,6 +95,7 @@ static void init(void) {
   if (g_app.touch) app_touch_navigation_enable(true);
   comm_init();
   home_window_push();
+  map_reserve();
 }
 
 static void deinit(void) {

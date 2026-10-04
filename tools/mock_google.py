@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
 
 PLACES = [
+    ("Northtown Library", "Library", 47.6850, -117.4080),
     ("Riverside Coffee Roasters", "Coffee shop", 47.6601, -117.4237),
     ("Lilac City Library", "Library", 47.6565, -117.4290),
     ("Falls Park", "Park", 47.6620, -117.4300),

@@ -27,6 +27,8 @@ enum {
   CMD_ROUTE_MAP = 18,
   CMD_MUTE = 19,
   CMD_CANCEL = 20,
+  CMD_MAP_ADJUST = 21,
+  CMD_NAV_VIEW = 22,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,
@@ -66,6 +68,9 @@ enum {
   MAN_BUS, MAN_TRAIN, MAN_SUBWAY, MAN_TRAM, MAN_WALK, MAN_NONE = 255
 };
 
+// Map adjust actions
+enum { ADJ_ZOOM_IN = 0, ADJ_ZOOM_OUT = 1, ADJ_PAN = 2, ADJ_RESET = 3, ADJ_FIT_ROUTE = 4 };
+
 // NAV flags
 #define NAV_ALERT_SOON  (1 << 0)
 #define NAV_ALERT_NOW   (1 << 1)
@@ -73,6 +78,7 @@ enum {
 #define NAV_REROUTING   (1 << 3)
 #define NAV_TRANSIT     (1 << 4)
 #define NAV_NO_GPS      (1 << 5)
+#define NAV_NEAR        (1 << 7)   // close to a maneuver: show the cards
 
 // Marker kinds
 enum { MK_ME = 0, MK_PIN = 1, MK_START = 2, MK_DEST = 3 };

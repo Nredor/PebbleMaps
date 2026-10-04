@@ -4,7 +4,7 @@ module.exports = {
     HELLO: 1, HOME_MAP: 2, SEARCH: 3, NEARBY: 4, SELECT: 5, MODE_TIMES: 6,
     ROUTE: 7, NAV_START: 8, NAV_STOP: 9, FAV_LIST: 10, FAV_TOGGLE: 11,
     FAV_DELETE: 12, FAV_SETMODE: 13, SAVE_HERE: 14, RESULTS_MAP: 15, STEPS: 16,
-    PLACE_MAP: 17, ROUTE_MAP: 18, MUTE: 19, CANCEL: 20,
+    PLACE_MAP: 17, ROUTE_MAP: 18, MUTE: 19, CANCEL: 20, MAP_ADJUST: 21, NAV_VIEW: 22,
     STATUS: 100, LIST: 101, MAP_BEGIN: 102, MAP_CHUNK: 103, MARKERS: 104,
     PLACE: 105, ROUTE_INFO: 106, NAV: 107, ERROR: 108, BUSY: 109, TOAST: 110
   },
@@ -27,8 +27,9 @@ module.exports = {
   },
   NAV_FLAG: {
     ALERT_SOON: 1, ALERT_NOW: 2, ARRIVED: 4, REROUTING: 8, TRANSIT: 16,
-    NO_GPS: 32, DEST_VISIBLE: 64
+    NO_GPS: 32, DEST_VISIBLE: 64, NEAR: 128
   },
+  ADJ: { ZOOM_IN: 0, ZOOM_OUT: 1, PAN: 2, RESET: 3, FIT_ROUTE: 4 },
   // Explore categories, same order as CATEGORY_NAMES in src/c/main.c
   CATEGORIES: [
     { name: 'Restaurants', types: ['restaurant'], rank: 'POPULARITY', radius: 3000 },

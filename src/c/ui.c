@@ -3,14 +3,60 @@
 
 Fonts g_fonts;
 
+#define PERSIST_TEXT_LEVEL 1
+
+static GFont F(const char *key) { return fonts_get_system_font(key); }
+
+void ui_set_text_level(int level) {
+  if (level < 0 || level > 2) {
+    // automatic: one step larger on the big Pebble Time 2 / Round 2 screens
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+    level = 1;
+#else
+    level = 0;
+#endif
+  }
+  g_fonts.level = level;
+  g_fonts.chip = F(FONT_KEY_GOTHIC_14_BOLD);
+  switch (level) {
+    case 0:
+      g_fonts.small = F(FONT_KEY_GOTHIC_18);
+      g_fonts.small_b = F(FONT_KEY_GOTHIC_18_BOLD);
+      g_fonts.body = F(FONT_KEY_GOTHIC_18);
+      g_fonts.body_b = F(FONT_KEY_GOTHIC_18_BOLD);
+      g_fonts.title = F(FONT_KEY_GOTHIC_24_BOLD);
+      g_fonts.big = F(FONT_KEY_GOTHIC_24_BOLD);
+      g_fonts.small_h = 18; g_fonts.body_h = 18; g_fonts.title_h = 24; g_fonts.big_h = 24;
+      break;
+    case 1:
+      g_fonts.small = F(FONT_KEY_GOTHIC_18);
+      g_fonts.small_b = F(FONT_KEY_GOTHIC_18_BOLD);
+      g_fonts.body = F(FONT_KEY_GOTHIC_24);
+      g_fonts.body_b = F(FONT_KEY_GOTHIC_24_BOLD);
+      g_fonts.title = F(FONT_KEY_GOTHIC_28_BOLD);
+      g_fonts.big = F(FONT_KEY_GOTHIC_28_BOLD);
+      g_fonts.small_h = 18; g_fonts.body_h = 24; g_fonts.title_h = 28; g_fonts.big_h = 28;
+      break;
+    default:
+      g_fonts.small = F(FONT_KEY_GOTHIC_24);
+      g_fonts.small_b = F(FONT_KEY_GOTHIC_24_BOLD);
+      g_fonts.body = F(FONT_KEY_GOTHIC_28);
+      g_fonts.body_b = F(FONT_KEY_GOTHIC_28_BOLD);
+      g_fonts.title = F(FONT_KEY_GOTHIC_28_BOLD);
+      g_fonts.big = F(FONT_KEY_BITHAM_30_BLACK);
+      g_fonts.small_h = 24; g_fonts.body_h = 28; g_fonts.title_h = 28; g_fonts.big_h = 30;
+      break;
+  }
+}
+
 void ui_init(void) {
-  g_fonts.small = fonts_get_system_font(FONT_KEY_GOTHIC_14);
-  g_fonts.small_b = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
-  g_fonts.body = fonts_get_system_font(FONT_KEY_GOTHIC_18);
-  g_fonts.body_b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
-  g_fonts.title = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  g_fonts.big = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-  g_fonts.roboto = fonts_get_system_font(FONT_KEY_ROBOTO_CONDENSED_21);
+  int level = persist_exists(PERSIST_TEXT_LEVEL) ? persist_read_int(PERSIST_TEXT_LEVEL) : 3;
+  ui_set_text_level(level);
+}
+
+void ui_save_text_level(int level) {
+  persist_write_int(PERSIST_TEXT_LEVEL, level);
+  ui_set_text_level(level);
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +98,7 @@ static void rect(GContext *ctx, int x1, int y1, int x2, int y2, int radius) {
 }
 
 static void text_glyph(GContext *ctx, const char *t, GColor fg) {
-  GFont f = s_sz >= 28 ? g_fonts.big : (s_sz >= 20 ? g_fonts.title : g_fonts.body_b);
+  GFont f = F(s_sz >= 28 ? FONT_KEY_GOTHIC_28_BOLD : (s_sz >= 20 ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_18_BOLD));
   int h = s_sz >= 28 ? 28 : (s_sz >= 20 ? 24 : 18);
   graphics_context_set_text_color(ctx, fg);
   graphics_draw_text(ctx, t, f, GRect(s_c.x - s_sz / 2 - 4, s_c.y - h / 2 - h / 5, s_sz + 8, h + 4),
@@ -74,8 +120,6 @@ IconId icon_for_mode(int mode) {
     default: return ICON_CAR;
   }
 }
-
-static const int8_t STAR_PTS[] = {20, 2, 25, 15, 38, 15, 27, 23, 31, 36, 20, 28, 9, 36, 13, 23, 2, 15, 15, 15};
 
 void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor bg) {
   s_c = c;
@@ -99,19 +143,37 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       break;
     }
     case ICON_STAR:
-      poly(ctx, STAR_PTS, 10, true);
+    case ICON_STAR_OUTLINE: {
+      // classic 5-point star, built symmetrically around the vertical axis
+      int R = size / 2, r = size * 20 / 100;
+      GPoint pts[10];
+      for (int i = 0; i <= 5; i++) {
+        int rad = (i % 2 == 0) ? R : r;
+        int32_t ang = TRIG_MAX_ANGLE * i / 10;
+        int x = (int)(sin_lookup(ang) * rad / TRIG_MAX_RATIO);
+        int y = (int)(-cos_lookup(ang) * rad / TRIG_MAX_RATIO) + size / 12;
+        pts[i] = GPoint(c.x + x, c.y + y);
+        if (i > 0 && i < 5) pts[10 - i] = GPoint(c.x - x, c.y + y);
+      }
+      GPath path = { .num_points = 10, .points = pts };
+      if (id == ICON_STAR) {
+        gpath_draw_filled(ctx, &path);
+        graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(gcolor_equal(fg, C_STAR) ? C_STAR_EDGE : fg, fg));
+        graphics_context_set_stroke_width(ctx, 1);
+        gpath_draw_outline(ctx, &path);
+      } else {
+        graphics_context_set_stroke_width(ctx, size >= 20 ? 2 : 1);
+        gpath_draw_outline(ctx, &path);
+      }
       break;
-    case ICON_STAR_OUTLINE:
-      graphics_context_set_stroke_width(ctx, sw > 1 ? sw - 1 : 1);
-      poly(ctx, STAR_PTS, 10, false);
-      break;
+    }
     case ICON_EXPLORE: {
-      graphics_context_set_stroke_width(ctx, sw);
-      circle(ctx, 20, 20, 17, false);
-      static const int8_t needle[] = {27, 13, 23, 23, 13, 27, 17, 17};
-      poly(ctx, needle, 4, true);
+      // red map pin (upside-down teardrop)
+      static const int8_t tri[] = {9, 20, 31, 20, 20, 39};
+      circle(ctx, 20, 14, 12, true);
+      poly(ctx, tri, 3, true);
       graphics_context_set_fill_color(ctx, bg);
-      circle(ctx, 20, 20, 2, true);
+      circle(ctx, 20, 14, 5, true);
       break;
     }
     case ICON_DIRECTIONS: {
@@ -353,8 +415,70 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
     case ICON_ZOOM_IN:
     case ICON_ZOOM_OUT:
       graphics_context_set_stroke_width(ctx, sw + 1);
-      line(ctx, 8, 20, 32, 20);
-      if (id == ICON_ZOOM_IN) line(ctx, 20, 8, 20, 32);
+      circle(ctx, 16, 16, 12, false);
+      graphics_context_set_stroke_width(ctx, sw + 2);
+      line(ctx, 25, 25, 36, 36);
+      graphics_context_set_stroke_width(ctx, sw);
+      line(ctx, 10, 16, 22, 16);
+      if (id == ICON_ZOOM_IN) line(ctx, 16, 10, 16, 22);
+      break;
+    case ICON_MOVE: {
+      graphics_context_set_stroke_width(ctx, sw);
+      line(ctx, 20, 6, 20, 34);
+      line(ctx, 6, 20, 34, 20);
+      static const int8_t u[] = {20, 1, 27, 9, 13, 9};
+      static const int8_t d[] = {20, 39, 27, 31, 13, 31};
+      static const int8_t l[] = {1, 20, 9, 13, 9, 27};
+      static const int8_t r2[] = {39, 20, 31, 13, 31, 27};
+      poly(ctx, u, 3, true);
+      poly(ctx, d, 3, true);
+      poly(ctx, l, 3, true);
+      poly(ctx, r2, 3, true);
+      break;
+    }
+    case ICON_MORE:
+      circle(ctx, 8, 20, 4, true);
+      circle(ctx, 20, 20, 4, true);
+      circle(ctx, 32, 20, 4, true);
+      break;
+    case ICON_UP: case ICON_DOWN: case ICON_LEFT: case ICON_RIGHT: {
+      static const int8_t up_pts[] = {20, 4, 36, 22, 26, 22, 26, 36, 14, 36, 14, 22, 4, 22};
+      int8_t pts2[14];
+      for (int i = 0; i < 7; i++) {
+        int x = up_pts[2 * i] - 20, y = up_pts[2 * i + 1] - 20, nx = x, ny = y;
+        if (id == ICON_DOWN) { ny = -y; }
+        else if (id == ICON_LEFT) { nx = y; ny = x; }
+        else if (id == ICON_RIGHT) { nx = -y; ny = x; }
+        pts2[2 * i] = nx + 20;
+        pts2[2 * i + 1] = ny + 20;
+      }
+      poly(ctx, pts2, 7, true);
+      break;
+    }
+    case ICON_EYE:
+    case ICON_EYE_OFF: {
+      static const int8_t eye[] = {2, 20, 10, 11, 20, 8, 30, 11, 38, 20, 30, 29, 20, 32, 10, 29};
+      poly(ctx, eye, 8, true);
+      graphics_context_set_fill_color(ctx, bg);
+      circle(ctx, 20, 20, 8, true);
+      graphics_context_set_fill_color(ctx, fg);
+      circle(ctx, 20, 20, 4, true);
+      if (id == ICON_EYE_OFF) {
+        graphics_context_set_stroke_color(ctx, bg);
+        graphics_context_set_stroke_width(ctx, sw + 3);
+        line(ctx, 6, 35, 34, 5);
+        graphics_context_set_stroke_color(ctx, fg);
+        graphics_context_set_stroke_width(ctx, sw + 1);
+        line(ctx, 6, 35, 34, 5);
+      }
+      break;
+    }
+    case ICON_STOP:
+      circle(ctx, 20, 20, 18, true);
+      graphics_context_set_stroke_color(ctx, bg);
+      graphics_context_set_stroke_width(ctx, sw + 1);
+      line(ctx, 13, 13, 27, 27);
+      line(ctx, 27, 13, 13, 27);
       break;
     case ICON_MAP: {
       static const int8_t a[] = {3, 8, 14, 4, 14, 32, 3, 36};
@@ -526,17 +650,23 @@ void draw_me_dot(GContext *ctx, GPoint c, int r) {
 #endif
 }
 
-void draw_puck(GContext *ctx, GPoint c, int r) {
+void draw_puck(GContext *ctx, GPoint c, int r, int heading_deg) {
 #ifdef PBL_COLOR
   graphics_context_set_antialiased(ctx, true);
 #endif
-  GPoint outer[4] = { GPoint(c.x, c.y - r - 3), GPoint(c.x + r + 3, c.y + r + 3),
-                      GPoint(c.x, c.y + r / 2 + 2), GPoint(c.x - r - 3, c.y + r + 3) };
-  GPoint inner[4] = { GPoint(c.x, c.y - r), GPoint(c.x + r, c.y + r),
-                      GPoint(c.x, c.y + r / 2), GPoint(c.x - r, c.y + r) };
+  // arrow pointing up, then rotated to the heading (0 = north/up)
+  int ox[4] = { 0, r + 3, 0, -r - 3 }, oy[4] = { -r - 4, r + 3, r / 2 + 2, r + 3 };
+  int ix[4] = { 0, r, 0, -r }, iy[4] = { -r, r, r / 2, r };
+  int32_t a = DEG_TO_TRIGANGLE(heading_deg);
+  int32_t sn = sin_lookup(a), cs = cos_lookup(a);
+  GPoint outer[4], inner[4];
+  for (int i = 0; i < 4; i++) {
+    outer[i] = GPoint(c.x + (ox[i] * cs - oy[i] * sn) / TRIG_MAX_RATIO, c.y + (ox[i] * sn + oy[i] * cs) / TRIG_MAX_RATIO);
+    inner[i] = GPoint(c.x + (ix[i] * cs - iy[i] * sn) / TRIG_MAX_RATIO, c.y + (ix[i] * sn + iy[i] * cs) / TRIG_MAX_RATIO);
+  }
   GPath po = { .num_points = 4, .points = outer };
   GPath pi = { .num_points = 4, .points = inner };
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorWhite, GColorWhite));
+  graphics_context_set_fill_color(ctx, GColorWhite);
   gpath_draw_filled(ctx, &po);
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_stroke_width(ctx, 1);
@@ -654,9 +784,12 @@ void dots_layer_destroy(Layer *layer) {
 // ---------------------------------------------------------------------------
 // Action strip
 // ---------------------------------------------------------------------------
+static GColor or_default(GColor c, GColor def) { return c.argb ? c : def; }
+
 void draw_action_strip(GContext *ctx, GRect bounds, const StripIcons *ic) {
   int w = STRIP_W;
   int cx;
+  int isz = PBL_IF_ROUND_ELSE(20, w >= 36 ? 22 : 19);
 #ifdef PBL_ROUND
   int R = bounds.size.h;
   graphics_context_set_fill_color(ctx, C_BG);
@@ -676,12 +809,41 @@ void draw_action_strip(GContext *ctx, GRect bounds, const StripIcons *ic) {
   if (dy > 70) dy = 70;
 #endif
   int cy = bounds.size.h / 2;
-  if (ic->up) icon_draw(ctx, ic->up, GPoint(cx, cy - dy), 18, C_ICON, C_BG);
+  if (ic->up) icon_draw(ctx, ic->up, GPoint(cx, cy - dy), isz, or_default(ic->up_color, C_ICON), C_BG);
   if (ic->select) {
-    GColor fill = ic->select_color.argb ? ic->select_color : C_BLUE;
-    draw_fab(ctx, GPoint(cx, cy), 12, ic->select, fill);
+    if (ic->select_plain) {
+      icon_draw(ctx, ic->select, GPoint(cx, cy), isz - 2, C_ICON, C_BG);
+    } else {
+      draw_fab(ctx, GPoint(cx, cy), w >= 36 ? 15 : 12, ic->select, or_default(ic->select_color, C_BLUE));
+    }
   }
-  if (ic->down) icon_draw(ctx, ic->down, GPoint(cx, cy + dy), 18, C_ICON, C_BG);
+  if (ic->pages > 1) {
+    int dx0 = cx - (ic->pages - 1) * 3;
+    for (int i = 0; i < ic->pages; i++) {
+      GPoint d = GPoint(dx0 + i * 6, cy + 13);
+      if (i == ic->page) {
+        graphics_context_set_fill_color(ctx, C_BLUE);
+        graphics_fill_circle(ctx, d, 2);
+      } else {
+        graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+        graphics_context_set_stroke_width(ctx, 1);
+        graphics_draw_circle(ctx, d, 2);
+      }
+    }
+  }
+  if (ic->down) icon_draw(ctx, ic->down, GPoint(cx, cy + dy), isz, or_default(ic->down_color, C_ICON), C_BG);
+}
+
+void draw_side_tab(GContext *ctx, GRect bounds) {
+  int r = PBL_IF_ROUND_ELSE(16, 14);
+  GPoint c = GPoint(bounds.origin.x + bounds.size.w + PBL_IF_ROUND_ELSE(0, 2), bounds.origin.y + bounds.size.h / 2);
+#ifdef PBL_COLOR
+  graphics_context_set_antialiased(ctx, true);
+#endif
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_circle(ctx, c, r);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  for (int i = -1; i <= 1; i++) graphics_fill_circle(ctx, GPoint(c.x - r / 2 - 1, c.y + i * 6), 1);
 }
 
 // ---------------------------------------------------------------------------

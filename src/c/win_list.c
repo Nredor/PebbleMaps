@@ -6,7 +6,7 @@
 #define MAX_RECENTS 10
 #define MAX_STEPS 40
 
-typedef struct {
+typedef struct ListWin {
   ListKind kind;
   int arg;
   Window *window;
@@ -21,6 +21,7 @@ typedef struct {
   bool loaded;
   char empty_text[64];
   ActionMenu *action_menu;
+  struct ListWin *next;
   ActionMenuLevel *am_root, *am_modes;
   int am_index;
 } ListWin;
@@ -28,7 +29,7 @@ typedef struct {
 static const char *title_for(ListKind k) {
   switch (k) {
     case LW_FAVS: return "Favorites";
-    case LW_CATEGORIES: return "Explore nearby";
+    case LW_CATEGORIES: return "Places";
     case LW_MODES: return "Get there by";
     case LW_STEPS: return "Directions";
     case LW_SETMODE: return "Default travel mode";
@@ -44,7 +45,9 @@ static GColor header_color(ListKind k) {
   }
 }
 
-#define HEADER_H PBL_IF_ROUND_ELSE(0, 22)
+static struct ListWin *s_all;
+
+#define HEADER_H PBL_IF_ROUND_ELSE(0, g_fonts.body_h + 4)
 
 // --- Data ------------------------------------------------------------------
 static void fill_modes(ListWin *lw) {
@@ -94,10 +97,12 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       int kind = tuple_int(it, MESSAGE_KEY_num, -1);
       const char *packed = tuple_str(it, MESSAGE_KEY_list);
       if (lw->kind == LW_FAVS && kind == LIST_FAVS) {
-        lw->count = parse_list(packed, lw->items, MAX_FAVS);
+        free(lw->items);
+        lw->items = alloc_list(packed, MAX_FAVS, &lw->count);
         lw->loaded = true;
       } else if (lw->kind == LW_FAVS && kind == LIST_RECENTS) {
-        lw->count2 = parse_list(packed, lw->items2, MAX_RECENTS);
+        free(lw->items2);
+        lw->items2 = alloc_list(packed, MAX_RECENTS, &lw->count2);
         lw->loaded = true;
       } else if (lw->kind == LW_MODES && kind == LIST_MODES) {
         ListItem tmp[MODE_COUNT];
@@ -107,7 +112,8 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
         }
         lw->loaded = true;
       } else if (lw->kind == LW_STEPS && kind == LIST_STEPS) {
-        lw->count = parse_list(packed, lw->items, MAX_STEPS);
+        free(lw->items);
+        lw->items = alloc_list(packed, MAX_STEPS, &lw->count);
         lw->loaded = true;
       } else {
         return;
@@ -147,7 +153,7 @@ static uint16_t num_rows(MenuLayer *m, uint16_t section, void *ctx) {
       if (!lw->loaded) return 0;
       if (section == 0) return lw->count + (lw->count ? 1 : 2);  // + hint + "Save my location"
       return lw->count2 ? lw->count2 : 0;
-    case LW_CATEGORIES: return CATEGORY_COUNT;
+    case LW_CATEGORIES: return CATEGORY_COUNT + 1;  // + Favorites
     case LW_STEPS: return lw->loaded ? (lw->count ? lw->count : 1) : 0;
     default: return lw->count;
   }
@@ -165,18 +171,39 @@ static void draw_header(GContext *ctx, const Layer *cell, uint16_t section, void
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_text_color(ctx, C_TEXT);
-  graphics_draw_text(ctx, section == 0 ? "SAVED" : "RECENT", g_fonts.small_b,
+  graphics_draw_text(ctx, section == 0 ? "SAVED" : "RECENT", g_fonts.chip,
                      GRect(PBL_IF_ROUND_ELSE(0, 6), -2, b.size.w - PBL_IF_ROUND_ELSE(0, 6), 16),
                      GTextOverflowModeFill, PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft), NULL);
 }
 
+static void row_content(ListWin *lw, MenuIndex *i, const char **title, const char **sub,
+                        IconId *icon, GColor *icon_color, int *maneuver, bool *badge);
+
 static int16_t cell_h(MenuLayer *m, MenuIndex *i, void *ctx) {
   ListWin *lw = ctx;
+  const char *title, *sub;
+  IconId icon;
+  GColor icol;
+  int man;
+  bool badge;
+  row_content(lw, i, &title, &sub, &icon, &icol, &man, &badge);
+  GRect mb = layer_get_bounds(menu_layer_get_layer(m));
 #ifdef PBL_ROUND
-  return menu_layer_is_index_selected(m, i) ? (lw->kind == LW_STEPS ? 84 : 66) : 36;
+  if (!menu_layer_is_index_selected(m, i)) return g_fonts.body_h + 16;
+  int tw = mb.size.w - 36;
+  GSize ts = graphics_text_layout_get_content_size(title, g_fonts.body_b, GRect(0, 0, tw, g_fonts.body_h * 3 + 8),
+                                                   GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter);
+  return 26 + ts.h + (sub ? g_fonts.small_h + 4 : 0) + 8;
 #else
-  if (lw->kind == LW_STEPS) return 58;
-  return 46;
+  int tw = mb.size.w - ((icon || man >= 0) ? 38 : 10);
+  if (lw->kind == LW_STEPS) {
+    GSize ts = graphics_text_layout_get_content_size(title, g_fonts.body_b, GRect(0, 0, tw, g_fonts.body_h * 4 + 8),
+                                                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+    int h = ts.h + (sub ? g_fonts.small_h : 0) + 10;
+    return h < 44 ? 44 : h;
+  }
+  int h = g_fonts.body_h + (sub ? g_fonts.small_h : 0) + 12;
+  return h < 40 ? 40 : h;
 #endif
 }
 
@@ -192,7 +219,7 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
           *title = "No favorites yet";
           *sub = "Use the star on any place";
           *icon = ICON_STAR_OUTLINE;
-          *icon_color = PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorBlack);
+          *icon_color = C_STAR_EDGE;
         } else if (i->row >= lw->count) {
           *title = "Save my location";
           *sub = "Add where you are now";
@@ -203,7 +230,7 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
           *title = it->title;
           *sub = it->sub;
           *icon = ICON_STAR;
-          *icon_color = PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorBlack);
+          *icon_color = C_STAR;
         }
       } else {
         ListItem *it = &lw->items2[i->row];
@@ -213,11 +240,18 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
       }
       break;
     case LW_CATEGORIES:
-      *title = CATEGORY_NAMES[i->row];
+      if (i->row == 0) {
+        *title = "Favorites";
+        *sub = NULL;
+        *icon = ICON_STAR;
+        *icon_color = C_STAR;
+        break;
+      }
+      *title = CATEGORY_NAMES[i->row - 1];
       *sub = NULL;
-      *icon = CATEGORY_ICONS[i->row];
+      *icon = CATEGORY_ICONS[i->row - 1];
 #ifdef PBL_COLOR
-      *icon_color = (GColor){ .argb = CATEGORY_COLORS[i->row] };
+      *icon_color = (GColor){ .argb = CATEGORY_COLORS[i->row - 1] };
 #endif
       break;
     case LW_STEPS:
@@ -257,57 +291,52 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   bool hl = menu_cell_layer_is_highlighted(cell);
   GColor fg = hl ? GColorWhite : C_TEXT;
   GColor sub_fg = hl ? GColorWhite : C_SUBTEXT;
-  GColor ic = hl ? GColorWhite : icol;
+#ifdef PBL_COLOR
+  bool keep_color = (icon == ICON_STAR);
+#else
+  bool keep_color = false;
+#endif
+  GColor ic = (hl && !keep_color) ? GColorWhite : icol;
   GColor bg = hl ? C_BLUE : C_BG;
+  int isz = g_fonts.level >= 1 ? 24 : 20;
 
 #ifdef PBL_ROUND
   if (!hl) {
     graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, title, g_fonts.body_b, GRect(20, 6, b.size.w - 40, 24),
+    graphics_draw_text(ctx, title, g_fonts.body_b, GRect(20, 4, b.size.w - 40, g_fonts.body_h + 6),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
     return;
   }
-  int y = 2;
-  if (man >= 0) maneuver_draw(ctx, man, GPoint(b.size.w / 2, y + 12), 22, ic, ic);
-  else if (icon) icon_draw(ctx, icon, GPoint(b.size.w / 2, y + 11), 18, ic, bg);
+  int y = 4;
+  if (man >= 0) maneuver_draw(ctx, man, GPoint(b.size.w / 2, y + 11), 22, ic, ic);
+  else if (icon) icon_draw(ctx, icon, GPoint(b.size.w / 2, y + 10), 20, ic, bg);
   y += 22;
   graphics_context_set_text_color(ctx, fg);
-  graphics_draw_text(ctx, title, lw->kind == LW_STEPS ? g_fonts.small_b : g_fonts.body_b,
-                     GRect(14, y - 2, b.size.w - 28, lw->kind == LW_STEPS ? 34 : 22),
+  int sub_h = sub ? g_fonts.small_h + 4 : 0;
+  graphics_draw_text(ctx, title, g_fonts.body_b, GRect(18, y - 3, b.size.w - 36, b.size.h - y - sub_h),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   if (sub) {
     graphics_context_set_text_color(ctx, sub_fg);
-    graphics_draw_text(ctx, sub, g_fonts.small, GRect(14, b.size.h - 20, b.size.w - 28, 18),
+    graphics_draw_text(ctx, sub, g_fonts.small, GRect(18, b.size.h - sub_h - 6, b.size.w - 36, sub_h),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   }
 #else
-  int tx = 34;
+  int tx = isz + 14;
   if (man >= 0) {
-    maneuver_draw(ctx, man, GPoint(16, b.size.h / 2), 24, ic, hl ? GColorLightGray : C_DIVIDER);
+    maneuver_draw(ctx, man, GPoint(tx / 2, b.size.h / 2), isz + 4, ic, hl ? GColorLightGray : C_DIVIDER);
   } else if (icon) {
-    icon_draw(ctx, icon, GPoint(16, b.size.h / 2), 20, ic, bg);
+    icon_draw(ctx, icon, GPoint(tx / 2, b.size.h / 2), isz, ic, bg);
   } else {
     tx = 6;
   }
   int tw = b.size.w - tx - 4;
-  if (lw->kind == LW_STEPS) {
-    graphics_context_set_text_color(ctx, fg);
-    graphics_draw_text(ctx, title, g_fonts.small_b, GRect(tx, -1, tw, 40),
-                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    if (sub) {
-      graphics_context_set_text_color(ctx, sub_fg);
-      graphics_draw_text(ctx, sub, g_fonts.small, GRect(tx, b.size.h - 18, tw, 16),
-                         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-    }
-    return;
-  }
-  int ty = sub ? 2 : (b.size.h - 24) / 2;
+  int sub_h = sub ? g_fonts.small_h : 0;
   graphics_context_set_text_color(ctx, fg);
-  graphics_draw_text(ctx, title, g_fonts.body_b, GRect(tx, ty, tw - (badge ? 44 : 0), 22),
+  graphics_draw_text(ctx, title, g_fonts.body_b, GRect(tx, -2, tw - (badge ? 50 : 0), b.size.h - sub_h - 2),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   if (sub) {
     graphics_context_set_text_color(ctx, sub_fg);
-    graphics_draw_text(ctx, sub, g_fonts.small, GRect(tx, ty + 21, tw, 18),
+    graphics_draw_text(ctx, sub, g_fonts.small, GRect(tx, b.size.h - sub_h - 6, tw, sub_h + 4),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
   if (badge) {
@@ -315,7 +344,7 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
     graphics_context_set_fill_color(ctx, hl ? GColorWhite : C_BLUE);
     graphics_fill_rect(ctx, br, 7, GCornersAll);
     graphics_context_set_text_color(ctx, hl ? C_BLUE : GColorWhite);
-    graphics_draw_text(ctx, "Default", g_fonts.small_b, GRect(br.origin.x, br.origin.y - 3, br.size.w, 16),
+    graphics_draw_text(ctx, "Default", g_fonts.chip, GRect(br.origin.x, br.origin.y - 3, br.size.w, 16),
                        GTextOverflowModeFill, GTextAlignmentCenter, NULL);
   }
 #endif
@@ -377,7 +406,8 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
       }
       break;
     case LW_CATEGORIES:
-      results_window_push_nearby(i->row);
+      if (i->row == 0) list_window_push(LW_FAVS, 0);
+      else results_window_push_nearby(i->row - 1);
       break;
     case LW_MODES:
       route_window_push(i->row);
@@ -409,7 +439,7 @@ static void header_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   GColor tc = (lw->kind == LW_FAVS) ? PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite) : GColorWhite;
   graphics_context_set_text_color(ctx, tc);
-  graphics_draw_text(ctx, title_for(lw->kind), g_fonts.body_b, GRect(0, -3, b.size.w, 22),
+  graphics_draw_text(ctx, title_for(lw->kind), g_fonts.body_b, GRect(0, -3, b.size.w, g_fonts.body_h + 6),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   // empty-favorites hint lives below the menu rows
 }
@@ -478,8 +508,20 @@ static void window_unload(Window *window) {
   dots_layer_destroy(lw->dots);
   free(lw->items);
   free(lw->items2);
+  for (ListWin **pp = &s_all; *pp; pp = &(*pp)->next) {
+    if (*pp == lw) { *pp = lw->next; break; }
+  }
   free(lw);
   window_destroy(window);
+}
+
+void list_windows_close_all(void) {
+  // removing a window unloads it, which unlinks it from s_all
+  while (s_all) {
+    ListWin *lw = s_all;
+    window_stack_remove(lw->window, false);
+    if (s_all == lw) s_all = lw->next;  // safety if unload did not run
+  }
 }
 
 void list_window_push(ListKind kind, int arg) {
@@ -487,9 +529,12 @@ void list_window_push(ListKind kind, int arg) {
   if (!lw) return;
   lw->kind = kind;
   lw->arg = arg;
-  int n = kind == LW_FAVS ? MAX_FAVS : (kind == LW_STEPS ? MAX_STEPS : MODE_COUNT + 1);
-  if (kind != LW_CATEGORIES) lw->items = calloc(n, sizeof(ListItem));
-  if (kind == LW_FAVS) lw->items2 = calloc(MAX_RECENTS, sizeof(ListItem));
+  if (kind == LW_MODES || kind == LW_SETMODE) {
+    lw->items = calloc(MODE_COUNT + 1, sizeof(ListItem));
+    if (!lw->items) { free(lw); return; }
+  }
+  lw->next = s_all;
+  s_all = lw;
   lw->window = window_create();
   window_set_user_data(lw->window, lw);
   window_set_background_color(lw->window, C_BG);

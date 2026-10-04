@@ -9,7 +9,8 @@ void comm_init(void);
 void comm_set_handler(CommHandler handler, void *ctx);
 void comm_clear_handler(CommHandler handler);
 
-// Outgoing message. Fields set to -1 (or empty text) are not sent.
+// Outgoing message. Fields left at OUT_NONE (or empty text) are not sent.
+#define OUT_NONE (-999999)
 typedef struct {
   int cmd, idx, mode, seq, width, height, num;
   char text[160];

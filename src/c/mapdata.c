@@ -6,11 +6,29 @@
 MapData g_map;
 static int s_next_seq = 1;
 
+// One screen-sized picture buffer, reserved once and reused for every map.
+// (Allocating a fresh 12 KB block per map fails on the original Pebble Time
+// once memory gets fragmented.)
+static GBitmap *s_buf;
+static GSize s_buf_size;
+#ifdef PBL_COLOR
+static GColor s_palette[16];
+#endif
+
+void map_reserve(void) {
+  if (s_buf) return;
+  GRect b = layer_get_unobstructed_bounds(window_get_root_layer(window_stack_get_top_window()));
+  s_buf_size = b.size;
+#ifdef PBL_COLOR
+  memset(s_palette, 0xFF, sizeof(s_palette));
+  s_buf = gbitmap_create_blank_with_palette(s_buf_size, GBitmapFormat4BitPalette, s_palette, false);
+#else
+  s_buf = gbitmap_create_blank(s_buf_size, GBitmapFormat1Bit);
+#endif
+}
+
 void map_release(void) {
-  if (g_map.bmp) {
-    gbitmap_destroy(g_map.bmp);
-    g_map.bmp = NULL;
-  }
+  g_map.bmp = NULL;
   g_map.complete = false;
   g_map.got = g_map.total = 0;
 }
@@ -23,9 +41,35 @@ static void notify(void) {
   if (g_map.observer) layer_mark_dirty(g_map.observer);
 }
 
+static int s_drag_x, s_drag_y;
+
+void map_set_drag(int dx, int dy) {
+  s_drag_x = dx;
+  s_drag_y = dy;
+  notify();
+}
+
+void map_adjust(int action, int dx, int dy) {
+  g_map.seq = s_next_seq++;
+  if (s_next_seq > 30000) s_next_seq = 1;
+  if (action == ADJ_PAN) {
+    g_map.shift_x -= dx;
+    g_map.shift_y -= dy;
+  }
+  OutMsg m;
+  comm_msg_init(&m, CMD_MAP_ADJUST);
+  m.seq = g_map.seq;
+  m.idx = action;
+  m.width = dx;
+  m.height = dy;
+  comm_send(&m);
+  notify();
+}
+
 int map_request(int cmd, int w, int h, int idx, int mode) {
   map_release();
   g_map.n_markers = 0;
+  g_map.shift_x = g_map.shift_y = 0;
   g_map.seq = s_next_seq++;
   if (s_next_seq > 30000) s_next_seq = 1;
   OutMsg m;
@@ -33,8 +77,8 @@ int map_request(int cmd, int w, int h, int idx, int mode) {
   m.seq = g_map.seq;
   m.width = w;
   m.height = h;
-  m.idx = idx;
-  m.mode = mode;
+  m.idx = idx < 0 ? OUT_NONE : idx;
+  m.mode = mode < 0 ? OUT_NONE : mode;
   comm_send(&m);
   notify();
   return g_map.seq;
@@ -45,33 +89,29 @@ void map_handle(int cmd, DictionaryIterator *it) {
   if (seq != g_map.seq) return;  // stale
   if (cmd == CMD_MAP_BEGIN) {
     map_release();
+    g_map.shift_x = g_map.shift_y = 0;
     int w = tuple_int(it, MESSAGE_KEY_width, 0);
     int h = tuple_int(it, MESSAGE_KEY_height, 0);
     int fmt = tuple_int(it, MESSAGE_KEY_fmt, FMT_4BIT);
     if (w <= 0 || h <= 0) return;
-#ifdef PBL_COLOR
-    if (fmt == FMT_4BIT) {
-      GColor *pal = malloc(16 * sizeof(GColor));
-      if (!pal) return;
-      memset(pal, 0xFF, 16 * sizeof(GColor));
-      const Tuple *pt = dict_find(it, MESSAGE_KEY_palette);
-      if (pt) {
-        int n = pt->length > 16 ? 16 : pt->length;
-        for (int i = 0; i < n; i++) pal[i].argb = pt->value->data[i];
-      }
-      g_map.bmp = gbitmap_create_blank_with_palette(GSize(w, h), GBitmapFormat4BitPalette, pal, true);
-      if (!g_map.bmp) free(pal);
-    } else {
-      g_map.bmp = gbitmap_create_blank(GSize(w, h), GBitmapFormat1Bit);
-    }
-#else
     (void)fmt;
-    g_map.bmp = gbitmap_create_blank(GSize(w, h), GBitmapFormat1Bit);
-#endif
-    if (!g_map.bmp) {
-      APP_LOG(APP_LOG_LEVEL_ERROR, "map alloc failed %dx%d", w, h);
+    map_reserve();
+    if (!s_buf) {
+      APP_LOG(APP_LOG_LEVEL_ERROR, "map buffer missing");
       return;
     }
+    if (w > s_buf_size.w) w = s_buf_size.w;
+    if (h > s_buf_size.h) h = s_buf_size.h;
+#ifdef PBL_COLOR
+    const Tuple *pt = dict_find(it, MESSAGE_KEY_palette);
+    memset(s_palette, 0xFF, sizeof(s_palette));
+    if (pt) {
+      int n = pt->length > 16 ? 16 : pt->length;
+      for (int i = 0; i < n; i++) s_palette[i].argb = pt->value->data[i];
+    }
+#endif
+    gbitmap_set_bounds(s_buf, GRect(0, 0, w, h));
+    g_map.bmp = s_buf;
     g_map.w = w;
     g_map.h = h;
     g_map.stride = tuple_int(it, MESSAGE_KEY_stride, gbitmap_get_bytes_per_row(g_map.bmp));
@@ -128,8 +168,8 @@ int map_pin_near(GPoint p, GRect frame, int max_dist) {
   for (int i = 0; i < g_map.n_markers; i++) {
     const Marker *mk = &g_map.markers[i];
     if (mk->kind != MK_PIN) continue;
-    int dx = frame.origin.x + mk->x - p.x;
-    int dy = frame.origin.y + mk->y - 10 - p.y;  // pin body sits above the tip
+    int dx = frame.origin.x + mk->x + g_map.shift_x - p.x;
+    int dy = frame.origin.y + mk->y + g_map.shift_y - 10 - p.y;  // pin body sits above the tip
     int d = dx * dx + dy * dy;
     if (d < best_d) {
       best_d = d;
@@ -140,9 +180,11 @@ int map_pin_near(GPoint p, GRect frame, int max_dist) {
 }
 
 void map_draw(GContext *ctx, GRect frame, int selected) {
+  int sx = g_map.shift_x + s_drag_x, sy = g_map.shift_y + s_drag_y;
+  if (sx || sy) draw_map_placeholder(ctx, frame);
   if (g_map.bmp) {
-    GRect r = GRect(frame.origin.x + (frame.size.w - g_map.w) / 2,
-                    frame.origin.y + (frame.size.h - g_map.h) / 2, g_map.w, g_map.h);
+    GRect r = GRect(frame.origin.x + (frame.size.w - g_map.w) / 2 + sx,
+                    frame.origin.y + (frame.size.h - g_map.h) / 2 + sy, g_map.w, g_map.h);
     graphics_context_set_compositing_mode(ctx, GCompOpAssign);
     graphics_draw_bitmap_in_rect(ctx, g_map.bmp, r);
     // rows not yet received: keep placeholder look
@@ -159,7 +201,7 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
   for (int pass = 0; pass < 3; pass++) {
     for (int i = 0; i < g_map.n_markers; i++) {
       const Marker *mk = &g_map.markers[i];
-      GPoint p = GPoint(frame.origin.x + mk->x, frame.origin.y + mk->y);
+      GPoint p = GPoint(frame.origin.x + mk->x + sx, frame.origin.y + mk->y + sy);
       bool is_sel = mk->kind == MK_PIN && mk->index == selected;
       if (pass == 0 && (mk->kind == MK_START || mk->kind == MK_ME)) {
         if (mk->kind == MK_ME) draw_me_dot(ctx, p, 5);

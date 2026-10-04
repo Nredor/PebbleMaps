@@ -7,7 +7,6 @@ function config() {
     {
       type: 'section',
       items: [
-        { type: 'heading', defaultValue: 'Get your free Google Maps key', size: 4 },
         { type: 'pmguide' }
       ]
     },
@@ -40,7 +39,7 @@ function config() {
         {
           type: 'text',
           defaultValue: 'Places you go often. Each one can have its own way of getting there. ' +
-            'On the watch, press <strong>Up</strong> on the map to open Favorites.'
+            'On the watch, press the red pin button (<strong>Down</strong>) on the map, then Favorites.'
         },
         { type: 'pmfavorites', messageKey: 'favorites', defaultValue: '[]' }
       ]
@@ -104,6 +103,20 @@ function config() {
           label: 'Avoid ferries (driving)',
           defaultValue: false
         },
+        { type: 'heading', defaultValue: 'Display', size: 4 },
+        {
+          type: 'select',
+          messageKey: 'textSize',
+          label: 'Text size on the watch',
+          defaultValue: 'auto',
+          description: 'Automatic uses Large on Pebble Time 2 and Round 2.',
+          options: [
+            { label: 'Automatic', value: 'auto' },
+            { label: 'Standard', value: '0' },
+            { label: 'Large', value: '1' },
+            { label: 'Extra large', value: '2' }
+          ]
+        },
         {
           type: 'select',
           messageKey: 'mapStyle',
@@ -125,11 +138,18 @@ function config() {
         {
           type: 'text',
           defaultValue:
-            '<strong>Map screen:</strong> Up = Favorites · Select = search by voice · Down = Explore nearby. ' +
-            'Hold Up/Down to zoom.<br><br>' +
-            '<strong>Results:</strong> Up/Down moves between pins, Select opens the place. Hold Select for a list.<br><br>' +
-            '<strong>Place:</strong> Up = ☆ save · Select = choose how to get there · Down = go now with the usual way.<br><br>' +
-            '<strong>Navigating:</strong> Up = all steps · Down = mute buzzing · Select = menu. Press Back twice to stop.'
+            '<strong>Map screen:</strong> Up = move the map · Select = search by voice · ' +
+            'Down (red pin) = Favorites and nearby places.<br><br>' +
+            '<strong>Moving the map:</strong> on any map, the right bar shows + and − to zoom. ' +
+            'Press Select (⋯) to switch to up/down, then left/right, then extra options. ' +
+            'It goes back to normal after 5 seconds. On Pebble Time 2, drag the map with your finger, ' +
+            'double-tap to zoom in, or press and hold to zoom out.<br><br>' +
+            '<strong>Results:</strong> Up/Down moves between pins, Select opens the place. ' +
+            'Hold Select for map controls and the list view.<br><br>' +
+            '<strong>Place and route screens:</strong> hold Select to move the map.<br><br>' +
+            '<strong>Navigating:</strong> press Select to open the options bar: move the map, mute buzzing, ' +
+            'hide the direction cards (they come back before each turn), see all steps, overview, or end. ' +
+            'Press Back twice to stop.'
         }
       ]
     },

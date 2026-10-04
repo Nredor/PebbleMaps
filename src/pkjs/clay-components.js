@@ -43,6 +43,13 @@ var THEME_CSS = [
   '.pm-status .ic{font-size:24px;flex:0 0 auto;}',
   // guide
   '.pm-guide{padding:4px 14px 12px;}',
+  '.pm-gh{font-size:19px!important;font-weight:600!important;margin:10px 0 4px!important;color:#202124;}',
+  '.pm-guide .pm-mini{display:none;text-align:center;}',
+  '.pm-guide.collapsed .pm-mini{display:block;}',
+  '.pm-guide.collapsed .pm-full{display:none;}',
+  '.section.pm-folded{background:transparent!important;box-shadow:none!important;margin-top:8px!important;}',
+  '.pm-show,.pm-hide{min-width:0!important;margin:4px auto!important;padding:6px 14px!important;font-size:14px!important;background:#e8f0fe!important;color:#1a73e8!important;font-weight:600;}',
+  '.pm-hide-row{text-align:center;}',
   '.pm-guide .intro{color:#3c4043;font-size:15px;line-height:1.5;margin:6px 0 10px;}',
   '.pm-need{background:#f8f9fa;border-radius:10px;padding:10px 12px;font-size:14px;color:#3c4043;line-height:1.5;margin-bottom:10px;}',
   '.pm-need b{color:#202124;}',
@@ -168,6 +175,9 @@ module.exports = [
     name: 'pmguide',
     template: [
       '<div class="pm-guide">',
+      '<div class="pm-mini"><button type="button" class="pm-show">Show setup instructions</button></div>',
+      '<div class="pm-full">',
+      '<h4 class="pm-gh">Get your free Google Maps key</h4>',
       '<p class="intro">Google charges apps for map data, so instead of a subscription, Pebble Maps lets you use ',
       '<b>your own Google key</b>. Google gives every key a big free monthly allowance — far more than one person uses.</p>',
 
@@ -252,17 +262,30 @@ module.exports = [
 
       '<div class="pm-free"><b>What\'s free?</b> Every month Google includes about 10,000 map pictures, 5,000 place searches and 5,000–10,000 route lookups at no charge. ',
       'A typical trip in Pebble Maps uses around 10, so normal use costs nothing.</div>',
-      '</div>'
+      '<div class="pm-hide-row"><button type="button" class="pm-hide">Hide instructions</button></div>',
+      '</div></div>'
     ].join(''),
     manipulator: staticManipulator(),
     initialize: function (minified, clay) {
       var root = this.$element[0];
-      // Once a key is saved, fold the guide away (it stays available)
+      // Once a key is saved and confirmed, fold the guide into one small button
+      function setCollapsed(on) {
+        var section = root.parentNode;
+        root.className = 'pm-guide' + (on ? ' collapsed' : '');
+        if (section && section.classList) {
+          if (on) section.classList.add('pm-folded');
+          else section.classList.remove('pm-folded');
+        }
+      }
+      root.querySelector('.pm-show').addEventListener('click', function () { setCollapsed(false); });
+      root.querySelector('.pm-hide').addEventListener('click', function () { setCollapsed(true); });
+      window.addEventListener('pm-key-ok', function () { setCollapsed(true); });
+      window.addEventListener('pm-key-empty', function () { setCollapsed(false); });
       clay.on(clay.EVENTS.AFTER_BUILD, function () {
         var item = clay.getItemByMessageKey('apiKey');
-        if (item && String(item.get() || '').trim()) {
-          Array.prototype.forEach.call(root.querySelectorAll('.pm-step'), function (st) { st.removeAttribute('open'); });
-        }
+        var has = item && String(item.get() || '').trim();
+        setCollapsed(!!has);
+        root.querySelector('.pm-hide-row').style.display = has ? 'block' : 'none';
       });
       // Build link rows: "Open" button + "Copy link" + visible address
       var links = root.querySelectorAll('.pm-link');
@@ -366,8 +389,16 @@ module.exports = [
       }
       function test(key) {
         key = String(key || '').replace(/\s+/g, '');
+        function fire(name) {
+          try {
+            var ev = document.createEvent('Event');
+            ev.initEvent(name, true, true);
+            window.dispatchEvent(ev);
+          } catch (e) { /* old browser */ }
+        }
         if (!key) {
           box.style.display = 'none';
+          fire('pm-key-empty');
           return show('wait', 'Paste your key above to test it.');
         }
         if (key.indexOf('test:') === 0) return show('ok', 'Developer test mode');
@@ -379,6 +410,7 @@ module.exports = [
         img.onload = function () {
           box.style.display = 'block';
           show('ok', '✓ It works! Google sent a map with your key. Tap Save settings below.');
+          fire('pm-key-ok');
         };
         img.onerror = function () {
           box.style.display = 'none';

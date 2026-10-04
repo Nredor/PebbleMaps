@@ -20,6 +20,7 @@ typedef struct {
   Marker markers[MAX_MARKERS];
   int n_markers;
   Layer *observer;
+  int16_t shift_x, shift_y;   // optimistic pan offset until the new picture arrives
 } MapData;
 
 extern MapData g_map;
@@ -28,7 +29,13 @@ extern MapData g_map;
 int map_request(int cmd, int w, int h, int idx, int mode);
 void map_set_observer(Layer *layer);
 void map_release(void);
+// Reserve the shared picture buffer (call once at start-up)
+void map_reserve(void);
 void map_handle(int cmd, DictionaryIterator *it);
+// Pan/zoom the current map (keeps the old picture, shifted, until the new one arrives)
+void map_adjust(int action, int dx, int dy);
+// Live drag offset (touch); does not request anything
+void map_set_drag(int dx, int dy);
 // Draw the image (or placeholder) and markers into frame. selected = result index or -1.
 void map_draw(GContext *ctx, GRect frame, int selected);
 // Find a marker for a result index; returns NULL if missing

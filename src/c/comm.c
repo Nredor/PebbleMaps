@@ -1,6 +1,7 @@
 // Pebble Maps - phone communication
 #include "comm.h"
 #include "mapdata.h"
+#include "ui.h"
 
 #define QUEUE_LEN 6
 
@@ -17,7 +18,7 @@ static void pump(void);
 void comm_msg_init(OutMsg *m, int cmd) {
   memset(m, 0, sizeof(*m));
   m->cmd = cmd;
-  m->idx = m->mode = m->seq = m->width = m->height = m->num = -1;
+  m->idx = m->mode = m->seq = m->width = m->height = m->num = OUT_NONE;
 }
 
 const Tuple *tuple_get(DictionaryIterator *it, uint32_t key) {
@@ -50,7 +51,7 @@ const char *tuple_str(DictionaryIterator *it, uint32_t key) {
 }
 
 static void add_int(DictionaryIterator *it, uint32_t key, int v) {
-  if (v >= 0) dict_write_int32(it, key, v);
+  if (v != OUT_NONE) dict_write_int32(it, key, v);
 }
 
 static void retry_cb(void *ctx) {
@@ -102,8 +103,8 @@ void comm_cmd(int cmd) {
 void comm_cmd2(int cmd, int idx, int mode) {
   OutMsg m;
   comm_msg_init(&m, cmd);
-  m.idx = idx;
-  m.mode = mode;
+  m.idx = idx < 0 ? OUT_NONE : idx;
+  m.mode = mode < 0 ? OUT_NONE : mode;
   comm_send(&m);
 }
 
@@ -141,6 +142,8 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
         int flags = tuple_int(it, MESSAGE_KEY_flags, 0);
         g_app.imperial = flags & 1;
         g_app.vibrate = (flags & 2) != 0;
+        int lvl = (flags >> 2) & 3;
+        if (lvl != g_fonts.level || lvl == 3) ui_save_text_level(lvl);
       }
       break;
     case CMD_MAP_BEGIN:
@@ -176,7 +179,7 @@ void comm_init(void) {
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
   uint32_t in_max = app_message_inbox_size_maximum();
-  uint32_t cap = PBL_IF_RECT_ELSE(4096, 4096);
+  uint32_t cap = 2048;  // 64 KB watches: memory is tight
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
   cap = 8192;
 #endif

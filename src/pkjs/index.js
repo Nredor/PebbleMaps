@@ -58,7 +58,7 @@ function sendStatus() {
     cmd: CMD.STATUS,
     num: google.hasKey() ? 1 : 0,
     mode: S.defaultMode,
-    flags: (S.imperial ? 1 : 0) | (S.vibrate ? 2 : 0)
+    flags: (S.imperial ? 1 : 0) | (S.vibrate ? 2 : 0) | ((S.textSize & 3) << 2)
   });
 }
 
@@ -153,32 +153,80 @@ function markerFor(p, view, kind, index) {
   return { x: s[0], y: s[1], kind: kind, index: index || 0 };
 }
 
-// view: {center, zoom, w, h, path?}; markers: array of {x,y,kind,index}
-function streamMap(seq, view, markers) {
+// view: {center, zoom, w, h, path?, gmarkers?}; markers: array of {x,y,kind,index} or null
+// done(err) is called once the picture starts streaming (or failed)
+function streamMap(seq, view, markers, done, quiet) {
   currentMapSeq = seq;
   msg.drop('map:');
-  var mk = encodeMarkers(markers.filter(Boolean));
-  if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
-  else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
-  getImage({ center: view.center, zoom: view.zoom, w: view.w, h: view.h, style: mapStyle(), path: view.path },
-    function (err, img) {
-      if (seq !== currentMapSeq) return;  // watch moved on
-      if (err) {
-        console.log('map error ' + JSON.stringify(err));
-        if (err.code === P.ERR.NO_KEY || err.title) sendError(err);
-        return;
-      }
-      send({
-        cmd: CMD.MAP_BEGIN, seq: seq, width: img.width, height: img.height, fmt: img.format,
-        stride: img.stride, palette: img.palette, total: img.data.length
-      }, 'map:' + seq);
-      var rows = Math.max(1, Math.floor((watch.inbox - 80) / img.stride));
-      var chunk = rows * img.stride;
-      for (var off = 0; off < img.data.length; off += chunk) {
-        var part = img.data.subarray(off, Math.min(img.data.length, off + chunk));
-        send({ cmd: CMD.MAP_CHUNK, seq: seq, offset: off, data: Array.prototype.slice.call(part) }, 'map:' + seq);
-      }
-    });
+  getImage({ center: view.center, zoom: view.zoom, w: view.w, h: view.h, style: mapStyle(), path: view.path,
+    markers: view.gmarkers }, function (err, img) {
+    if (seq !== currentMapSeq) { if (done) done({ stale: true }); return; }
+    if (err) {
+      console.log('map error ' + JSON.stringify(err));
+      if (!quiet && (err.code === P.ERR.NO_KEY || err.title)) sendError(err);
+      if (done) done(err);
+      return;
+    }
+    send({
+      cmd: CMD.MAP_BEGIN, seq: seq, width: img.width, height: img.height, fmt: img.format,
+      stride: img.stride, palette: img.palette, total: img.data.length
+    }, 'map:' + seq);
+    if (markers) {
+      var mk = encodeMarkers(markers.filter(Boolean));
+      if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
+      else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
+    }
+    if (done) done(null);
+    var rows = Math.max(1, Math.floor((watch.inbox - 80) / img.stride));
+    var chunk = rows * img.stride;
+    for (var off = 0; off < img.data.length; off += chunk) {
+      var part = img.data.subarray(off, Math.min(img.data.length, off + chunk));
+      send({ cmd: CMD.MAP_CHUNK, seq: seq, offset: off, data: Array.prototype.slice.call(part) }, 'map:' + seq);
+    }
+  });
+}
+
+// Each screen's map remembers where the user moved it
+var views = {};      // kind -> { view, base, markers: fn(view) }
+var lastKind = null;
+
+function cloneView(v) {
+  return { center: v.center.slice(), zoom: v.zoom, w: v.w, h: v.h, path: v.path, gmarkers: v.gmarkers };
+}
+
+function showView(seq, kind, base, markersFn, restore) {
+  var st = views[kind];
+  if (restore && st && st.view.w === base.w && st.view.h === base.h) {
+    st.base = base;
+    st.markers = markersFn;
+  } else {
+    st = views[kind] = { view: cloneView(base), base: base, markers: markersFn };
+  }
+  lastKind = kind;
+  streamMap(seq, st.view, markersFn(st.view));
+}
+
+function onAdjust(p) {
+  if (navigator_ && navState) return navAdjust(p);
+  var st = views[lastKind];
+  if (!st) return;
+  var v = cloneView(st.view);
+  var dx = p.width || 0, dy = p.height || 0;
+  switch (p.idx) {
+    case P.ADJ.ZOOM_IN: v.zoom = Math.min(20, v.zoom + 1); break;
+    case P.ADJ.ZOOM_OUT: v.zoom = Math.max(2, v.zoom - 1); break;
+    case P.ADJ.PAN: {
+      var q = geo.project(v.center[0], v.center[1], v.zoom);
+      v.center = geo.unproject(q[0] + dx, q[1] + dy, v.zoom);
+      break;
+    }
+    default:
+      v = cloneView(st.base);
+      if (lastKind === 'home' && me) v.center = me.slice();
+      break;
+  }
+  st.view = v;
+  streamMap(p.seq, v, st.markers(v));
 }
 
 function clampSize(w, h) {
@@ -200,8 +248,9 @@ function onHomeMap(p) {
   var zoom = p.idx > 0 ? p.idx : 15;
   getLocation(20000, function (err, loc) {
     if (err) return sendError(err);
-    var view = { center: loc, zoom: zoom, w: size[0], h: size[1] };
-    streamMap(p.seq, view, [markerFor(loc, view, P.MK.ME)]);
+    showView(p.seq, 'home', { center: loc.slice(), zoom: zoom, w: size[0], h: size[1] }, function (v) {
+      return [me ? markerFor(me, v, P.MK.ME) : null];
+    }, p.mode === 1);
   });
 }
 
@@ -248,13 +297,16 @@ function onNearby(p) {
 function onResultsMap(p) {
   if (!results.length) return;
   var size = clampSize(p.width, p.height);
-  var bottom = p.mode > 0 ? p.mode : 60;
+  var restore = p.mode >= 10000;
+  var bottom = (p.mode > 0 ? p.mode : 60) % 10000;
   var pts = results.map(function (r) { return [r.lat, r.lng]; });
   var fit = geo.fitBounds(pts, size[0], size[1], { top: 52, bottom: bottom + 4, left: 16, right: 16 }, 16);
-  var view = { center: fit.center, zoom: fit.zoom, w: size[0], h: size[1] };
-  var markers = results.map(function (r, i) { return markerFor([r.lat, r.lng], view, P.MK.PIN, i); });
-  if (me) markers.unshift(markerFor(me, view, P.MK.ME));
-  streamMap(p.seq, view, markers);
+  var list = results;
+  showView(p.seq, 'results', { center: fit.center, zoom: fit.zoom, w: size[0], h: size[1] }, function (v) {
+    var markers = list.map(function (r, i) { return markerFor([r.lat, r.lng], v, P.MK.PIN, i); });
+    if (me) markers.unshift(markerFor(me, v, P.MK.ME));
+    return markers;
+  }, restore);
 }
 
 // Resolve the chosen destination's coordinates (favorites may only have an address)
@@ -339,13 +391,14 @@ function onPlaceMap(p) {
   var size = clampSize(p.width, p.height);
   withDest(function (err, d) {
     if (err) return;
-    var view = { center: [d.lat, d.lng], zoom: 16, w: size[0], h: size[1] };
     // move the pin down a little so its body is centered
     var q = geo.project(d.lat, d.lng, 16);
-    view.center = geo.unproject(q[0], q[1] - 10, 16);
-    var markers = [markerFor([d.lat, d.lng], view, P.MK.DEST)];
-    if (me) markers.unshift(markerFor(me, view, P.MK.ME));
-    streamMap(p.seq, view, markers);
+    var base = { center: geo.unproject(q[0], q[1] - 10, 16), zoom: 16, w: size[0], h: size[1] };
+    showView(p.seq, 'place', base, function (v) {
+      var markers = [markerFor([d.lat, d.lng], v, P.MK.DEST)];
+      if (me) markers.unshift(markerFor(me, v, P.MK.ME));
+      return markers;
+    }, false);
   });
 }
 
@@ -427,11 +480,10 @@ function onRoute(p) {
     });
     var pts = rt.points.length ? rt.points : [me, [rt.dest.lat, rt.dest.lng]];
     var fit = geo.fitBounds(pts, size[0], size[1], { top: 34, bottom: 14, left: 14, right: 14 }, 17);
-    var view = { center: fit.center, zoom: fit.zoom, w: size[0], h: size[1], path: geo.thin(pts, 600) };
-    streamMap(p.seq, view, [
-      markerFor(pts[0], view, P.MK.START),
-      markerFor(pts[pts.length - 1], view, P.MK.DEST)
-    ]);
+    var base = { center: fit.center, zoom: fit.zoom, w: size[0], h: size[1], path: geo.thin(pts, 600) };
+    showView(p.seq, 'route', base, function (v) {
+      return [markerFor(pts[0], v, P.MK.START), markerFor(pts[pts.length - 1], v, P.MK.DEST)];
+    }, false);
   });
 }
 
@@ -442,6 +494,116 @@ function onSteps() {
 }
 
 // --- Navigation ------------------------------------------------------------
+// The navigation map follows you. It is a Google map picture centered a bit
+// ahead of you; the watch slides it under your position arrow and asks for a
+// new picture only when you get near its edge.
+var navState = null;
+
+function navBaseZoom(mode) {
+  return mode === P.MODE.DRIVE ? 16 : (mode === P.MODE.WALK ? 17 : 16);
+}
+
+function navAugment(d) {
+  var st = navState;
+  if (!st || !st.shown || !navigator_ || !navigator_.pos) return d;
+  var sh = st.shown;
+  var pk = geo.toScreen(navigator_.pos, sh.center, sh.zoom, sh.w, sh.h);
+  d.width = pk[0];
+  d.height = pk[1];
+  if (sh.follow) {
+    d.stride = pk[0];
+    d.total = pk[1];
+  } else {
+    d.stride = Math.round(sh.w / 2);
+    d.total = Math.round(sh.h / 2);
+  }
+  d.offset = Math.round(navigator_.heading || 0);
+  return d;
+}
+
+function navWanted() {
+  var st = navState, r = navigator_.route;
+  var w = st.w, h = st.h;
+  var z = Math.max(3, Math.min(20, navBaseZoom(r.mode) + st.zoomDelta));
+  if (st.overview) {
+    var pts = r.points.length ? r.points : [navigator_.pos];
+    var fit = geo.fitBounds(pts, w, h, { top: 24, bottom: 24, left: 16, right: 16 }, 17);
+    return { center: fit.center, zoom: fit.zoom, follow: false };
+  }
+  if (st.pan) return { center: st.pan, zoom: z, follow: false };
+  var pos = navigator_.pos;
+  var look = 0.22 * Math.min(w, h);
+  var q = geo.project(pos[0], pos[1], z);
+  var hd = geo.rad(navigator_.heading || 0);
+  return { center: geo.unproject(q[0] + Math.sin(hd) * look, q[1] - Math.cos(hd) * look, z), zoom: z, follow: true };
+}
+
+function navMaybeFetch(force) {
+  var st = navState;
+  if (!st || !navigator_ || !navigator_.pos || navigator_.arrived) return;
+  var want = navWanted();
+  var sh = st.shown;
+  if (!force && sh) {
+    if (st.fetching) return;
+    if (want.follow && sh.follow && sh.zoom === want.zoom) {
+      var pk = geo.toScreen(navigator_.pos, sh.center, sh.zoom, sh.w, sh.h);
+      var dx = pk[0] - sh.w / 2, dy = pk[1] - sh.h / 2;
+      if (Math.sqrt(dx * dx + dy * dy) < 0.3 * Math.min(sh.w, sh.h)) return;
+      if (Date.now() - st.lastFetch < 3000) return;
+    } else if (!want.follow && !sh.follow && sh.zoom === want.zoom &&
+               Math.abs(sh.center[0] - want.center[0]) < 1e-7 && Math.abs(sh.center[1] - want.center[1]) < 1e-7) {
+      return;
+    }
+  }
+  var r = navigator_.route;
+  var d = r.dest;
+  var view = {
+    center: want.center, zoom: want.zoom, w: st.w, h: st.h, follow: want.follow,
+    path: geo.thin(r.points, 300),
+    gmarkers: d ? ['size:small|color:red|' + d.lat.toFixed(6) + ',' + d.lng.toFixed(6)] : null
+  };
+  st.fetching = true;
+  st.lastFetch = Date.now();
+  var seq = st.seq;
+  streamMap(seq, view, null, function (err) {
+    if (!navState || navState.seq !== seq) return;
+    navState.fetching = false;
+    if (err) return;
+    navState.shown = view;
+    if (navigator_ && navigator_.lastDict) send(navAugment(JSON.parse(JSON.stringify(navigator_.lastDict))), 'nav');
+  }, true);
+}
+
+function navSend(d) {
+  if (d.cmd === CMD.NAV && !(d.flags & P.NAV_FLAG.ARRIVED)) {
+    navMaybeFetch(false);
+    navAugment(d);
+  }
+  send(d, 'nav');
+}
+
+function navAdjust(p) {
+  var st = navState;
+  if (!navigator_ || !navigator_.pos) return;
+  st.seq = p.seq;
+  var z = Math.max(3, Math.min(20, navBaseZoom(navigator_.route.mode) + st.zoomDelta));
+  switch (p.idx) {
+    case P.ADJ.ZOOM_IN: st.zoomDelta = Math.min(4, st.zoomDelta + 1); break;
+    case P.ADJ.ZOOM_OUT: st.zoomDelta = Math.max(-6, st.zoomDelta - 1); break;
+    case P.ADJ.PAN: {
+      var from = st.pan || (st.overview && st.shown ? st.shown.center : navigator_.pos);
+      var zz = st.overview && st.shown ? st.shown.zoom : z;
+      var q = geo.project(from[0], from[1], zz);
+      st.pan = geo.unproject(q[0] + (p.width || 0), q[1] + (p.height || 0), zz);
+      if (st.overview) { st.zoomDelta = zz - navBaseZoom(navigator_.route.mode); st.overview = false; }
+      break;
+    }
+    case P.ADJ.FIT_ROUTE: st.overview = true; st.pan = null; break;
+    default: st.pan = null; st.overview = false; break;
+  }
+  navMaybeFetch(true);
+}
+
 function stopNav() {
   if (watchId !== null) {
     navigator.geolocation.clearWatch(watchId);
@@ -450,6 +612,7 @@ function stopNav() {
   if (simTimer) { clearInterval(simTimer); simTimer = null; }
   if (gpsTimer) { clearInterval(gpsTimer); gpsTimer = null; }
   navigator_ = null;
+  navState = null;
 }
 
 function startSimulation() {
@@ -474,19 +637,22 @@ function startSimulation() {
 function onNavStart(p) {
   stopNav();
   var mode = p.mode >= 0 && p.mode <= 3 ? p.mode : S.defaultMode;
+  navState = { seq: p.seq, w: clampSize(p.width, p.height)[0], h: clampSize(p.width, p.height)[1],
+    zoomDelta: 0, pan: null, overview: false, shown: null, fetching: false, lastFetch: 0 };
   getRoute(mode, false, function (err, rt) {
     if (err) return sendError(err);
     navigator_ = new nav.Navigator({
       route: rt,
       view: { w: p.width > 0 ? p.width : watch.w, h: p.height > 0 ? p.height : watch.h - 100 },
       settings: S,
-      send: function (d) { send(d, 'nav'); },
+      send: navSend,
       reroute: function (pos, cb) {
         google.computeRoute(pos, rt.dest, mode, prefs(), true, function (e2, r) {
           if (e2) return cb(e2);
           route = nav.buildRoute(r, mode, rt.dest);
           routeTime = Date.now();
           cb(null, route);
+          setTimeout(function () { navMaybeFetch(true); }, 0);  // redraw the new route line
         });
       },
       onArrive: function () {
@@ -592,6 +758,7 @@ function onMessage(e) {
         toast(p.mode === P.MODE_USE_DEFAULT ? 'Uses app default' : 'Default: ' + P.MODE_NAMES[p.mode]);
         break;
       case CMD.SAVE_HERE: onSaveHere(); break;
+      case CMD.MAP_ADJUST: onAdjust(p); break;
       default:
         break;
     }

@@ -38,3 +38,9 @@ extern const uint8_t CATEGORY_COLORS[CATEGORY_COUNT];
 
 // List message parsing: fields separated by 0x1F, items by 0x1E.
 int parse_list(const char *packed, ListItem *items, int max);
+// Allocate exactly as many items as the message holds (NULL if none)
+ListItem *alloc_list(const char *packed, int max, int *count);
+// Close screens between home and the route overview (frees memory for navigation)
+void results_window_close(void);
+void place_window_close(void);
+void list_windows_close_all(void);

@@ -363,6 +363,7 @@ function staticMapUrl(opts) {
     }
     q.push('path=' + encodeURIComponent('color:' + color + '|weight:' + (opts.style === 'bw' ? 4 : 5) + '|enc:' + enc));
   }
+  if (opts.markers) opts.markers.forEach(function (m) { q.push('markers=' + encodeURIComponent(m)); });
   q.push('key=' + encodeURIComponent(config.key));
   return url('maps', '/maps/api/staticmap?' + q.join('&'));
 }

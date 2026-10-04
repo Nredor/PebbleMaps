@@ -13,8 +13,11 @@
 #define C_NAVGREEN  PBL_IF_COLOR_ELSE(GColorJaegerGreen, GColorBlack)
 #define C_NAVGREEN_DK PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorBlack)
 #define C_TEXT      PBL_IF_COLOR_ELSE(GColorBlack, GColorBlack)
-#define C_SUBTEXT   PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
-#define C_ICON      PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
+#define C_SUBTEXT   GColorBlack
+#define C_ICON      PBL_IF_COLOR_ELSE(GColorBlack, GColorBlack)
+#define C_STAR      PBL_IF_COLOR_ELSE(GColorYellow, GColorBlack)
+#define C_STAR_EDGE PBL_IF_COLOR_ELSE(GColorWindsorTan, GColorBlack)
+#define C_PIN       PBL_IF_COLOR_ELSE(GColorRed, GColorBlack)
 #define C_BG        GColorWhite
 #define C_DIVIDER   PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack)
 #define C_MAPBG     PBL_IF_COLOR_ELSE(GColorWhite, GColorWhite)
@@ -28,22 +31,26 @@ typedef enum {
   ICON_FOOD, ICON_GAS, ICON_CART, ICON_TREE, ICON_BED, ICON_ATM,
   ICON_PHARMACY, ICON_PLUG, ICON_PARKING, ICON_BOOK, ICON_MUTE,
   ICON_SOUND, ICON_CLOSE, ICON_ZOOM_IN, ICON_ZOOM_OUT, ICON_MAP,
-  ICON_KEY, ICON_COUNT
+  ICON_KEY, ICON_MOVE, ICON_MORE, ICON_UP, ICON_DOWN, ICON_LEFT, ICON_RIGHT,
+  ICON_EYE, ICON_EYE_OFF, ICON_STOP, ICON_COUNT
 } IconId;
 
-// Fonts (loaded once)
+// Fonts, chosen by the text-size setting (level 0 = standard, 1 = large, 2 = extra large)
 typedef struct {
-  GFont small;     // Gothic 14
-  GFont small_b;   // Gothic 14 bold
-  GFont body;      // Gothic 18
-  GFont body_b;    // Gothic 18 bold
-  GFont title;     // Gothic 24 bold
-  GFont big;       // Gothic 28 bold
-  GFont roboto;    // Roboto Condensed 21
+  int level;
+  GFont small, small_b;   // labels and secondary lines
+  GFont body, body_b;     // list titles, main text
+  GFont title;            // card titles
+  GFont big;              // big numbers (distance, time)
+  GFont chip;             // tiny chips (always small)
+  int small_h, body_h, title_h, big_h;
 } Fonts;
 extern Fonts g_fonts;
 
 void ui_init(void);
+// level: 0..2, or 3 = automatic for this watch
+void ui_set_text_level(int level);
+void ui_save_text_level(int level);
 
 // Icons: size is the icon's bounding box edge in pixels, centered at c.
 void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor bg);
@@ -54,7 +61,7 @@ void maneuver_draw(GContext *ctx, int code, GPoint c, int size, GColor fg, GColo
 // Map glyphs
 void draw_pin(GContext *ctx, GPoint tip, int r, bool selected);
 void draw_me_dot(GContext *ctx, GPoint c, int r);
-void draw_puck(GContext *ctx, GPoint c, int r);
+void draw_puck(GContext *ctx, GPoint c, int r, int heading_deg);
 
 // Google "FAB": a filled circle with a white icon
 void draw_fab(GContext *ctx, GPoint c, int r, IconId icon, GColor fill);
@@ -66,11 +73,20 @@ void dots_layer_set_running(Layer *layer, bool running);
 void dots_layer_destroy(Layer *layer);
 
 // Simple action strip on the right edge (Up / Select / Down)
+#if defined(PBL_PLATFORM_EMERY)
+#define STRIP_W 36
+#else
 #define STRIP_W PBL_IF_ROUND_ELSE(40, 30)
+#endif
 typedef struct {
   IconId up, select, down;
-  GColor select_color;
+  GColor select_color;   // FAB color for the middle button
+  GColor up_color, down_color;  // icon colors (clear = default)
+  bool select_plain;     // draw the middle icon without a FAB circle
+  int page, pages;       // page dots under the middle icon (pages > 1)
 } StripIcons;
+// Small black half-circle on the right edge: "press Select for options"
+void draw_side_tab(GContext *ctx, GRect bounds);
 void draw_action_strip(GContext *ctx, GRect bounds, const StripIcons *icons);
 
 // Toast banner (one at a time, attached to a window)

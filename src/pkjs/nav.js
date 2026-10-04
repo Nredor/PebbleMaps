@@ -206,17 +206,10 @@ Navigator.prototype.remainingSeconds = function (k, s) {
   return sec * (this.route.factor || 1);
 };
 
-// Route points ahead of the snapped position, rotated heading-up, in pixels
-Navigator.prototype.vectorPoints = function (snap, distToMan) {
+// Smoothed direction of travel along the route (degrees, 0 = north)
+Navigator.prototype.updateHeading = function (snap) {
   var r = this.route;
-  var mode = r.mode;
-  var h = this.view.h || 60;
-  var minM = mode === P.MODE.DRIVE ? 1.6 : 0.6;
-  var maxM = mode === P.MODE.DRIVE ? 14 : 3.5;
-  var mpp = Math.max(minM, Math.min(maxM, (distToMan * 1.15) / (h * 0.62)));
-  this.mpp = mpp;
   var origin = this.snappedPoint(snap);
-  // heading: direction of the route a little ahead
   var aheadIdx = snap.idx + 1;
   while (aheadIdx < r.points.length - 1 && r.cum[aheadIdx] - snap.s < 15) aheadIdx++;
   var target = r.points[Math.min(aheadIdx, r.points.length - 1)];
@@ -226,25 +219,7 @@ Navigator.prototype.vectorPoints = function (snap, distToMan) {
     var diff = ((hdg - this.heading + 540) % 360) - 180;
     this.heading = (this.heading + diff * 0.6 + 360) % 360;
   }
-  var th = geo.rad(this.heading);
-  var sin = Math.sin(th), cos = Math.cos(th);
-  var maxDist = (h * 1.2 + (this.view.w || 144)) * mpp;
-  var out = [[0, 0]];
-  var destVisible = false;
-  for (var i = snap.idx + 1; i < r.points.length && out.length < 60; i++) {
-    var d = geo.toLocal(origin, r.points[i]);
-    var f = d[0] * sin + d[1] * cos;       // forward
-    var rt = d[0] * cos - d[1] * sin;      // right
-    var x = Math.round(rt / mpp), y = Math.round(-f / mpp);
-    x = Math.max(-1500, Math.min(1500, x));
-    y = Math.max(-1500, Math.min(1500, y));
-    var prev = out[out.length - 1];
-    if (Math.abs(prev[0] - x) + Math.abs(prev[1] - y) < 2 && i < r.points.length - 1) continue;
-    out.push([x, y]);
-    if (i === r.points.length - 1) destVisible = true;
-    if (r.cum[i] - snap.s > maxDist) break;
-  }
-  return { pts: out, destVisible: destVisible };
+  this.pos = origin;
 };
 
 Navigator.prototype.snappedPoint = function (snap) {
@@ -353,14 +328,9 @@ Navigator.prototype.update = function (pos, accuracy) {
     flags |= P.NAV_FLAG.ALERT_SOON;
   }
 
+  if (distM <= soonAt * 1.15) flags |= P.NAV_FLAG.NEAR;
   var remain = this.remainingSeconds(k, snap.s);
-  var vec = this.vectorPoints(snap, distM);
-  if (vec.destVisible) flags |= P.NAV_FLAG.DEST_VISIBLE;
-  var data = [];
-  vec.pts.forEach(function (p) {
-    var x = p[0] & 0xffff, y = p[1] & 0xffff;
-    data.push(x & 0xff, (x >> 8) & 0xff, y & 0xff, (y >> 8) & 0xff);
-  });
+  this.updateHeading(snap);
 
   var dict = {
     cmd: P.CMD.NAV,
@@ -371,12 +341,12 @@ Navigator.prototype.update = function (pos, accuracy) {
     num: man,
     idx: thenMan,
     num2: Math.round((now + remain * 1000) / 1000),
-    flags: flags,
-    data: data
+    flags: flags
   };
-  var key = [k, man, dict.text2, flags & ~P.NAV_FLAG.DEST_VISIBLE].join('|');
+  this.lastDict = dict;
+  var key = [k, man, dict.text2, flags].join('|');
   var important = (flags & (P.NAV_FLAG.ALERT_NOW | P.NAV_FLAG.ALERT_SOON)) || key.split('|')[0] !== this.lastKey.split('|')[0];
-  if (important || now - this.lastSent > 1500) {
+  if (important || now - this.lastSent > 1200) {
     this.lastSent = now;
     this.lastKey = key;
     this.send(dict);

@@ -2,6 +2,10 @@
 #include "windows.h"
 #include "comm.h"
 #include "mapdata.h"
+#include "mapbar.h"
+
+static MapBar s_bar;
+static MapTouch s_touch;
 
 static Window *s_window;
 static Layer *s_canvas;
@@ -64,60 +68,91 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   int y = mh + 1;
   GTextAlignment al = PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft);
   graphics_context_set_text_color(ctx, C_TEXT);
-  GFont nf = b.size.h >= 200 ? g_fonts.title : g_fonts.body_b;
-  GSize ns = graphics_text_layout_get_content_size(s_name, nf, GRect(0, 0, tw, 48),
+  GFont nf = g_fonts.body_b;
+  int nmax = g_fonts.body_h * 2 + 8;
+  GSize ns = graphics_text_layout_get_content_size(s_name, nf, GRect(0, 0, tw, nmax),
                                                    GTextOverflowModeTrailingEllipsis, al);
-  graphics_draw_text(ctx, s_name, nf, GRect(x, y, tw, 48), GTextOverflowModeTrailingEllipsis, al, NULL);
-  y += ns.h + 2;
+  graphics_draw_text(ctx, s_name, nf, GRect(x, y - 3, tw, nmax), GTextOverflowModeTrailingEllipsis, al, NULL);
+  y += ns.h;
   if (s_type[0] || s_dist[0]) {
     char line[96];
     if (s_type[0] && s_dist[0]) snprintf(line, sizeof(line), "%s · %s", s_type, s_dist);
     else snprintf(line, sizeof(line), "%s%s", s_type, s_dist);
     graphics_context_set_text_color(ctx, PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorBlack));
-    graphics_draw_text(ctx, line, g_fonts.small_b, GRect(x, y, tw, 18), GTextOverflowModeTrailingEllipsis, al, NULL);
-    y += 16;
+    graphics_draw_text(ctx, line, g_fonts.small_b, GRect(x, y - 2, tw, g_fonts.small_h + 4), GTextOverflowModeTrailingEllipsis, al, NULL);
+    y += g_fonts.small_h;
   }
   graphics_context_set_text_color(ctx, C_SUBTEXT);
-  graphics_draw_text(ctx, s_addr, g_fonts.small, GRect(x, y, tw, b.size.h - y - 2),
+  graphics_draw_text(ctx, s_addr, g_fonts.small, GRect(x, y - 2, tw, b.size.h - y),
                      GTextOverflowModeTrailingEllipsis, al, NULL);
 
+  // hint badge: map can be moved (hold Select)
+  if (!s_bar.open) {
+    GRect bd = GRect(PBL_IF_ROUND_ELSE(w / 2 - 10, 3), mh - 22, 20, 19);
+    draw_card(ctx, bd, 5);
+    icon_draw(ctx, ICON_MOVE, GPoint(bd.origin.x + 10, bd.origin.y + 9), 13, C_TEXT, C_BG);
+  }
+  if (s_bar.open) {
+    mapbar_draw(&s_bar, ctx, b);
+    return;
+  }
   // strip: star / directions / quick-go
   StripIcons ic = { .up = s_fav ? ICON_STAR : ICON_STAR_OUTLINE, .select = ICON_NONE,
-                    .down = icon_for_mode(s_mode) };
+                    .down = icon_for_mode(s_mode), .up_color = s_fav ? C_STAR : C_STAR_EDGE };
   draw_action_strip(ctx, b, &ic);
   int cx = PBL_IF_ROUND_ELSE(b.size.w - STRIP_W / 2 - 4, b.size.w - STRIP_W / 2);
-  icon_draw(ctx, ICON_DIRECTIONS, GPoint(cx, b.size.h / 2), 26, C_BLUE, GColorWhite);
-#ifdef PBL_COLOR
-  if (s_fav) {
-    int dy = PBL_IF_ROUND_ELSE(b.size.h / 4, b.size.h / 2 - 26 > 70 ? 70 : b.size.h / 2 - 26);
-    icon_draw(ctx, ICON_STAR, GPoint(cx, b.size.h / 2 - dy), 18, GColorChromeYellow, C_BG);
-  }
-#endif
+  icon_draw(ctx, ICON_DIRECTIONS, GPoint(cx, b.size.h / 2), STRIP_W - 4, C_BLUE, GColorWhite);
+}
+
+static void bar_cb(MapBarEvent ev, void *ctx) {
+  if (ev == MB_EV_EXTRA_UP) map_adjust(ADJ_RESET, 0, 0);
+  if (s_canvas) layer_mark_dirty(s_canvas);
 }
 
 static void up_click(ClickRecognizerRef r, void *ctx) {
+  if (mapbar_button(&s_bar, BUTTON_ID_UP)) return;
   if (!s_loaded) return;
   comm_cmd(CMD_FAV_TOGGLE);
   s_fav = !s_fav;
   layer_mark_dirty(s_canvas);
 }
 static void select_click(ClickRecognizerRef r, void *ctx) {
+  if (mapbar_button(&s_bar, BUTTON_ID_SELECT)) return;
   if (!s_loaded) return;
   list_window_push(LW_MODES, s_mode);
 }
 static void down_click(ClickRecognizerRef r, void *ctx) {
+  if (mapbar_button(&s_bar, BUTTON_ID_DOWN)) return;
   if (!s_loaded) return;
   route_window_push(s_mode);
 }
 
+static void back_click(ClickRecognizerRef r, void *ctx) {
+  if (mapbar_button(&s_bar, BUTTON_ID_BACK)) return;
+  window_stack_remove(s_window, true);
+}
+static void select_long(ClickRecognizerRef r, void *ctx) {
+  if (!s_loaded) return;
+  if (s_bar.open) mapbar_close(&s_bar);
+  else mapbar_open(&s_bar);
+}
+
 static void click_config(void *ctx) {
+  window_single_click_subscribe(BUTTON_ID_BACK, back_click);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, select_long, NULL);
   window_single_click_subscribe(BUTTON_ID_UP, up_click);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_click);
 }
 
+static void map_tap(GPoint p, void *ctx) {
+  GRect b = layer_get_bounds(s_canvas);
+  if (!s_bar.open && p.y > map_h(b) - 24 && p.x < 30) mapbar_open(&s_bar);
+}
+
 static void touch_cb(const TouchEvent *e, void *ctx) {
-  if (e->type != TouchEvent_Liftoff) return;
+  if (maptouch_event(&s_touch, e)) return;
+  if (e->type != TouchEvent_Liftoff || e->non_navigational) return;
   GRect b = layer_get_bounds(s_canvas);
   if (e->x < b.size.w - STRIP_W) return;
   if (e->y < b.size.h / 3) up_click(NULL, NULL);
@@ -134,6 +169,9 @@ static void window_load(Window *window) {
   s_dots = dots_layer_create(GRect(0, map_h(b) + 10, b.size.w - STRIP_W, 30));
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
+  mapbar_init(&s_bar, s_canvas, GSize(b.size.w - STRIP_W, map_h(b)), ICON_PIN, ICON_NONE, bar_cb, NULL);
+  s_bar.extra_up_color = C_PIN;
+  maptouch_init(&s_touch, GRect(0, 0, b.size.w - STRIP_W, map_h(b)), map_tap, NULL, &s_bar);
   comm_cmd2(CMD_SELECT, s_idx, s_src);
 }
 
@@ -148,6 +186,8 @@ static void window_disappear(Window *window) {
   comm_clear_handler(handle);
   map_set_observer(NULL);
   ui_toast_cancel();
+  mapbar_deinit(&s_bar);
+  maptouch_deinit(&s_touch);
   if (g_app.touch) touch_service_unsubscribe();
 }
 
@@ -156,6 +196,10 @@ static void window_unload(Window *window) {
   layer_destroy(s_canvas);
   window_destroy(s_window);
   s_window = NULL;
+}
+
+void place_window_close(void) {
+  if (s_window) window_stack_remove(s_window, false);
 }
 
 void place_window_push(int src, int idx, const char *title) {

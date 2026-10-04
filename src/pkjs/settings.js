@@ -48,7 +48,8 @@ function get() {
     avoidFerries: bool(c.avoidFerries, false),
     vibrate: bool(c.vibrate, true),
     allModeTimes: bool(c.allModeTimes, true),
-    mapStyle: c.mapStyle || 'light'
+    mapStyle: c.mapStyle || 'light',
+    textSize: (c.textSize === undefined || c.textSize === '' || c.textSize === 'auto') ? 3 : (parseInt(c.textSize, 10) || 0)
   };
 }
 
