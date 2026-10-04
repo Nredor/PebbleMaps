@@ -1,6 +1,7 @@
 // Pebble Maps - phone communication
 #include "comm.h"
 #include "mapdata.h"
+#include "voice.h"
 #include "ui.h"
 
 #define QUEUE_LEN 6
@@ -150,6 +151,9 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
     case CMD_MAP_CHUNK:
     case CMD_MARKERS:
       map_handle(cmd, it);
+      return;
+    case CMD_VOICE:
+      voice_handle(it);
       return;
     default:
       break;

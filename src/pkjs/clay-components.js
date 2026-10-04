@@ -219,15 +219,16 @@ module.exports = [
 
       // Step 4
       '<details class="pm-step" data-step="4"><summary><span class="n">4</span><span class="t">Turn on the map services</span><span class="chev">›</span></summary>',
-      '<div class="body"><p>This one link turns on all four services Pebble Maps uses:</p>',
-      '<div class="pm-link" data-url="https://console.cloud.google.com/flows/enableapi?apiid=static-maps-backend.googleapis.com,places.googleapis.com,routes.googleapis.com,geocoding-backend.googleapis.com"></div>',
+      '<div class="body"><p>This one link turns on all five services Pebble Maps uses:</p>',
+      '<div class="pm-link" data-url="https://console.cloud.google.com/flows/enableapi?apiid=static-maps-backend.googleapis.com,places.googleapis.com,routes.googleapis.com,geocoding-backend.googleapis.com,texttospeech.googleapis.com"></div>',
       '<ol><li>Check the project at the top says <b>Pebble Maps</b>.</li>',
       '<li>Tap <span class="pm-chip">Next</span>, then <span class="pm-chip">Enable</span>.</li></ol>',
       '<p>That turns on:</p><ul style="padding-left:18px;margin:4px 0">',
       '<li><b>Maps Static API</b> — the map pictures</li>',
       '<li><b>Places API (New)</b> — searching for places</li>',
       '<li><b>Routes API</b> — directions and travel times</li>',
-      '<li><b>Geocoding API</b> — turning addresses into map spots</li></ul>',
+      '<li><b>Geocoding API</b> — turning addresses into map spots</li>',
+      '<li><b>Cloud Text-to-Speech API</b> — spoken directions on watches with a speaker (Pebble Time 2, Pebble Round 2)</li></ul>',
       '<div class="tip">If Google says billing is required, finish step 3 first, then open this link again.</div>',
       '</div></details>',
 
@@ -241,7 +242,7 @@ module.exports = [
       '<li>Your key appears. It starts with <b>AIza</b> and is about 39 letters and numbers long. Tap the <b>copy</b> icon next to it.</li></ol>',
       '<p><b>Make it safer (recommended):</b></p><ol>',
       '<li>Tap the key\'s name (or <span class="pm-chip">Edit API key</span>).</li>',
-      '<li>Under <b>API restrictions</b>, choose <span class="pm-chip">Restrict key</span> and tick the four services from step 4.</li>',
+      '<li>Under <b>API restrictions</b>, choose <span class="pm-chip">Restrict key</span> and tick the five services from step 4.</li>',
       '<li>Tap <span class="pm-chip">Save</span>.</li></ol>',
       '<div class="warn">Leave <b>Application restrictions</b> set to <b>None</b>. "Websites", "Android apps" or "iOS apps" will block Pebble Maps.</div>',
       '</div></details>',
@@ -414,7 +415,7 @@ module.exports = [
         };
         img.onerror = function () {
           box.style.display = 'none';
-          show('bad', '✗ Google didn\'t accept this key yet. Check steps 3–5 (billing, the four services, and "Application restrictions: None"). New keys can take a few minutes to start working.');
+          show('bad', '✗ Google didn\'t accept this key yet. Check steps 3–5 (billing, the services in step 4, and "Application restrictions: None"). New keys can take a few minutes to start working.');
         };
         img.src = 'https://maps.googleapis.com/maps/api/staticmap?center=' + lat + ',' + lng +
           '&zoom=15&size=480x240&scale=2&key=' + encodeURIComponent(key) + '&markers=color:red%7C' + lat + ',' + lng;

@@ -226,6 +226,15 @@ class H(BaseHTTPRequestHandler):
             text = body.get("textQuery", "").lower()
             res = [p for p in PLACES if any(w in p[0].lower() or w in p[1].lower() for w in text.split())] or PLACES[:5]
             return self.send(200, {"places": [place_json(p) for p in res]})
+        if self.path.endswith("text:synthesize"):
+            import base64, struct, wave
+            text = body.get("input", {}).get("text", "")
+            n = int(8000 * min(3.0, 0.3 + 0.06 * len(text)))
+            buf = io.BytesIO()
+            w = wave.open(buf, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000)
+            w.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / 8000))) for i in range(n)))
+            w.close()
+            return self.send(200, {"audioContent": base64.b64encode(buf.getvalue()).decode()})
         if self.path.endswith("places:autocomplete"):
             text = body.get("input", "").lower()
             res = [p for p in PLACES if p[0].lower().startswith(text) or any(w.startswith(text) for w in p[0].lower().split())]

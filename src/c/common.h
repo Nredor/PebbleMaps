@@ -30,6 +30,7 @@ enum {
   CMD_MAP_ADJUST = 21,
   CMD_NAV_VIEW = 22,
   CMD_AUTOCOMPLETE = 23,
+  CMD_NAV_VOICE = 24,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,
@@ -42,6 +43,7 @@ enum {
   CMD_ERROR = 108,
   CMD_BUSY = 109,
   CMD_TOAST = 110,
+  CMD_VOICE = 111,
 };
 
 // Travel modes

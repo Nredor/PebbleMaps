@@ -3,6 +3,7 @@
 #include "comm.h"
 #include "mapdata.h"
 #include "mapbar.h"
+#include "voice.h"
 #ifndef IDLE_MS
 #define IDLE_MS 5000
 #endif
@@ -13,7 +14,12 @@ static Layer *s_dots;
 static int s_mode;
 static bool s_have;
 static bool s_arrived;
-static bool s_muted;
+// alerts: vibrate only, vibrate + voice (watches with a speaker), or off
+enum { ALERT_VIBE = 0, ALERT_VOICE, ALERT_OFF };
+static int s_alert_mode;
+#define s_muted (s_alert_mode == ALERT_OFF)
+#define PERSIST_VOICE 3
+static GPoint s_compass;      // where the compass is drawn (tap it to switch north-up / follow)
 static bool s_cards_hidden;   // this navigation session only
 static int s_flags;
 static int s_man = MAN_DEPART;
@@ -40,7 +46,13 @@ static MapBar s_bar;          // map controls (zoom / move)
 static MapTouch s_touch;
 static bool s_moved;          // user moved the map: re-center when controls close
 
-#define MENU_PAGES 3
+enum { PAGE_VIEW = 0, PAGE_CARDS, PAGE_VOLUME, PAGE_END };
+static int menu_pages(void) { return s_alert_mode == ALERT_VOICE ? 4 : 3; }
+static int page_kind(int p) {
+  if (p < 2) return p;
+  if (s_alert_mode == ALERT_VOICE && p == 2) return PAGE_VOLUME;
+  return PAGE_END;
+}
 
 static bool cards_visible(void) {
   return !s_cards_hidden || s_arrived || (s_flags & (NAV_NEAR | NAV_ALERT_NOW | NAV_ALERT_SOON | NAV_NO_GPS | NAV_REROUTING));
@@ -57,6 +69,16 @@ static GRect banner_text_rect(GRect b, int h) {
 }
 #endif
 
+#ifndef PBL_ROUND
+// Big text if the instruction fits on two lines, otherwise the smaller font
+static GFont banner_font(GRect b) {
+  GRect r = banner_text_rect(b, 200);
+  int two = graphics_text_layout_get_content_size("A\nA", g_fonts.body_b, r, GTextOverflowModeWordWrap, GTextAlignmentLeft).h;
+  int h = graphics_text_layout_get_content_size(s_instr, g_fonts.body_b, r, GTextOverflowModeWordWrap, GTextAlignmentLeft).h;
+  return h <= two ? g_fonts.body_b : g_fonts.small_b;
+}
+#endif
+
 static int banner_h(GRect b) {
 #ifdef PBL_ROUND
   GSize ts = graphics_text_layout_get_content_size(s_instr, g_fonts.small_b, GRect(0, 0, b.size.w - 50, 100),
@@ -64,7 +86,7 @@ static int banner_h(GRect b) {
   int h = 40 + ts.h + 8;
   return clampi(h, 70, b.size.h * 45 / 100);
 #else
-  GSize ts = graphics_text_layout_get_content_size(s_instr, g_fonts.body_b, banner_text_rect(b, 200),
+  GSize ts = graphics_text_layout_get_content_size(s_instr, banner_font(b), banner_text_rect(b, 200),
                                                    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
   int left = icon_size() + g_fonts.small_h + 8;
   int h = ts.h + 6 > left ? ts.h + 6 : left;
@@ -142,6 +164,7 @@ static void draw_map(GContext *ctx, GRect b, GRect visible) {
   // small compass: the red tip points north
   if (s_have_puck) {
     GPoint cc = GPoint(visible.origin.x + PBL_IF_ROUND_ELSE(visible.size.w / 2 - 50, 14), visible.origin.y + 14);
+    s_compass = cc;
     graphics_context_set_fill_color(ctx, GColorWhite);
     graphics_fill_circle(ctx, cc, 11);
     graphics_context_set_stroke_color(ctx, C_DIVIDER);
@@ -179,10 +202,8 @@ static void draw_banner(GContext *ctx, GRect b, int bh) {
   maneuver_draw(ctx, s_man, GPoint(col / 2, 4 + isz / 2), isz, GColorWhite, ghost);
   graphics_draw_text(ctx, s_dist, g_fonts.small_b, GRect(0, isz + 2, col, g_fonts.small_h + 4),
                      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
-  GFont f = g_fonts.body_b;
+  GFont f = banner_font(b);
   GRect tr = banner_text_rect(b, bh + 3);
-  GSize ts = graphics_text_layout_get_content_size(text, f, tr, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
-  if (ts.h > bh) f = g_fonts.small_b;
   graphics_draw_text(ctx, text, f, tr, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 #endif
   int th = then_h();
@@ -251,17 +272,21 @@ static void draw_arrived(GContext *ctx, GRect b) {
 }
 
 static void draw_menu(GContext *ctx, GRect b) {
-  StripIcons ic = { .select = ICON_MORE, .select_plain = true, .page = s_menu_page, .pages = MENU_PAGES };
-  switch (s_menu_page) {
-    case 0:
+  StripIcons ic = { .select = ICON_MORE, .select_plain = true, .page = s_menu_page, .pages = menu_pages() };
+  switch (page_kind(s_menu_page)) {
+    case PAGE_VIEW:
       ic.up = ICON_MOVE;
       ic.down = s_heading_up ? ICON_HEADING : ICON_NORTH;
       ic.down_color = C_BLUE;
       break;
-    case 1:
+    case PAGE_CARDS:
       ic.up = s_cards_hidden ? ICON_EYE : ICON_EYE_OFF;
-      ic.down = s_muted ? ICON_MUTE : ICON_SOUND;
-      ic.down_color = s_muted ? C_RED : C_ICON;
+      ic.down = s_alert_mode == ALERT_OFF ? ICON_MUTE : (s_alert_mode == ALERT_VOICE ? ICON_SOUND : ICON_VIBRATE);
+      ic.down_color = s_alert_mode == ALERT_OFF ? C_RED : (s_alert_mode == ALERT_VOICE ? C_BLUE : C_ICON);
+      break;
+    case PAGE_VOLUME:
+      ic.up = ICON_VOL_UP;
+      ic.down = ICON_VOL_DOWN;
       break;
     default:
       ic.up = ICON_LIST;
@@ -305,6 +330,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
 // --- Options bar -----------------------------------------------------------------
 static void end_nav(void) {
+  voice_stop();
   comm_cmd(CMD_NAV_STOP);
   window_stack_remove(s_window, true);
 }
@@ -366,27 +392,56 @@ static void bar_cb(MapBarEvent ev, void *ctx) {
   if (s_canvas) layer_mark_dirty(s_canvas);
 }
 
+static void send_voice(void) {
+  OutMsg m;
+  comm_msg_init(&m, CMD_NAV_VOICE);
+  m.idx = s_alert_mode == ALERT_VOICE ? 1 : 0;
+  comm_send(&m);
+}
+
+// Vibrate -> Vibrate + voice (if the watch has a speaker) -> Off -> Vibrate ...
 static void toggle_mute(void) {
-  s_muted = !s_muted;
-  ui_toast(s_window, s_muted ? "Turn alerts off" : "Turn alerts on");
+  if (s_alert_mode == ALERT_VIBE) s_alert_mode = VOICE_AVAILABLE ? ALERT_VOICE : ALERT_OFF;
+  else if (s_alert_mode == ALERT_VOICE) s_alert_mode = ALERT_OFF;
+  else s_alert_mode = ALERT_VIBE;
+  if (s_alert_mode != ALERT_VOICE) voice_stop();
+  if (VOICE_AVAILABLE) persist_write_bool(PERSIST_VOICE, s_alert_mode == ALERT_VOICE);
+  send_voice();
+  if (s_menu_page >= menu_pages()) s_menu_page = 0;
+  ui_toast(s_window, s_alert_mode == ALERT_VOICE ? "Voice directions on" :
+                     (s_alert_mode == ALERT_OFF ? "Alerts off" : "Alerts: vibrate only"));
+}
+
+static void toggle_heading(void) {
+  s_heading_up = !s_heading_up;
+  persist_write_bool(PERSIST_HEADING_UP, s_heading_up);
+  send_view_mode();
+  ui_toast(s_window, s_heading_up ? "Map turns with you" : "North up");
+  if (s_canvas) layer_mark_dirty(s_canvas);
+}
+
+static void change_volume(int delta) {
+  voice_set_volume(voice_volume() + delta);
+  static char text[24];
+  snprintf(text, sizeof(text), "Volume %d%%", voice_volume());
+  ui_toast(s_window, text);
 }
 
 static void menu_action(ButtonId b) {
   menu_poke();
   if (b == BUTTON_ID_SELECT) {
-    s_menu_page = (s_menu_page + 1) % MENU_PAGES;
-  } else if (s_menu_page == 0) {
+    s_menu_page = (s_menu_page + 1) % menu_pages();
+  } else if (page_kind(s_menu_page) == PAGE_VIEW) {
     if (b == BUTTON_ID_UP) {
       // map controls replace the options bar
       if (s_menu_timer) { app_timer_cancel(s_menu_timer); s_menu_timer = NULL; }
       mapbar_open(&s_bar);
     } else {
-      s_heading_up = !s_heading_up;
-      persist_write_bool(PERSIST_HEADING_UP, s_heading_up);
-      send_view_mode();
-      ui_toast(s_window, s_heading_up ? "Map turns with you" : "North up");
+      toggle_heading();
     }
-  } else if (s_menu_page == 1) {
+  } else if (page_kind(s_menu_page) == PAGE_VOLUME) {
+    change_volume(b == BUTTON_ID_UP ? 10 : -10);
+  } else if (page_kind(s_menu_page) == PAGE_CARDS) {
     if (b == BUTTON_ID_UP) {
       s_cards_hidden = !s_cards_hidden;
       ui_toast(s_window, s_cards_hidden ? "Cards hidden until the next turn" : "Cards shown");
@@ -455,6 +510,12 @@ static void click_config(void *ctx) {
 
 // --- Touch -----------------------------------------------------------------------
 static void map_tap(GPoint p, void *ctx) {
+  // the compass: switch between north-up and the map turning with you
+  int dx = p.x - s_compass.x, dy = p.y - s_compass.y;
+  if (s_have_puck && dx * dx + dy * dy <= 20 * 20) {
+    toggle_heading();
+    return;
+  }
   if (!s_menu_open && !s_bar.open) menu_open();
 }
 
@@ -542,6 +603,8 @@ void nav_window_push(int mode) {
   GRect b = layer_get_bounds(window_get_root_layer(s_window));
   s_heading_up = persist_exists(PERSIST_HEADING_UP) ? persist_read_bool(PERSIST_HEADING_UP) : true;
   s_map_heading = 0;
+  s_alert_mode = (VOICE_AVAILABLE && persist_exists(PERSIST_VOICE) && persist_read_bool(PERSIST_VOICE)) ? ALERT_VOICE : ALERT_VIBE;
   map_request(CMD_NAV_START, b.size.w, b.size.h, -1, mode);
   if (!s_heading_up) send_view_mode();
+  if (s_alert_mode == ALERT_VOICE) send_voice();
 }

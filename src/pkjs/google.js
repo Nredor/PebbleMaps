@@ -33,6 +33,7 @@ function url(service, path) {
   var hosts = {
     places: 'https://places.googleapis.com',
     routes: 'https://routes.googleapis.com',
+    tts: 'https://texttospeech.googleapis.com',
     maps: 'https://maps.googleapis.com'
   };
   return hosts[service] + path;
@@ -263,6 +264,28 @@ function placeDetails(placeId, token, cb) {
   });
 }
 
+// --- Cloud Text-to-Speech (spoken directions) ----------------------------------
+// cb(err, base64 WAV at 8 kHz)
+function tts(text, cb) {
+  var lang = config.language === 'en' ? 'en-US' : config.language;
+  request({
+    method: 'POST',
+    url: url('tts', '/v1/text:synthesize'),
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': config.key },
+    body: JSON.stringify({
+      input: { text: text },
+      voice: { languageCode: lang, ssmlGender: 'FEMALE' },
+      audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 8000, speakingRate: 1.1 }
+    })
+  }, function (err, body) {
+    if (err) return cb(friendlyError(err.status, err.body, 'Text-to-Speech API'));
+    var j;
+    try { j = JSON.parse(body); } catch (e) { return cb(friendlyError(500, 'Bad response', 'Text-to-Speech API')); }
+    if (!j.audioContent) return cb(friendlyError(500, 'No audio', 'Text-to-Speech API'));
+    cb(null, j.audioContent);
+  });
+}
+
 // --- Geocoding API --------------------------------------------------------
 function geocode(address, cb) {
   getJSON('maps', '/maps/api/geocode/json?address=' + encodeURIComponent(address) +
@@ -440,6 +463,7 @@ function checkKey(loc, cb) {
 }
 
 module.exports = {
+  tts: tts,
   autocomplete: autocomplete,
   placeDetails: placeDetails,
   setKey: setKey,

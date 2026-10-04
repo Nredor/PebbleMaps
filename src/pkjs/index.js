@@ -16,6 +16,7 @@ var clayConfig = require('./clay-config');
 var clayComponents = require('./clay-components');
 var dev = require('./dev');
 var tiles = require('./tiles');
+var voice = require('./voice');
 
 var CMD = P.CMD;
 
@@ -722,6 +723,12 @@ function onSteps() {
 // sends a fresh one only when you turn or get near its edge. In between, the
 // watch slides the picture under your position arrow.
 var navState = null;
+var voiceOn = false;
+
+voice.onProblem(function (err) {
+  console.log('voice: ' + (err.text || err.title));
+  toast(err.code === P.ERR.NETWORK ? 'Voice: no connection' : 'Voice: turn on Text-to-Speech (Settings, step 4)');
+});
 
 function navBaseZoom(mode) {
   return mode === P.MODE.DRIVE ? 16 : (mode === P.MODE.WALK ? 17 : 16);
@@ -790,16 +797,27 @@ function navAugment(d) {
   return d;
 }
 
+// Direction of travel inside a picture turned to `heading` (unit vector, screen coords)
+function travelDir(heading) {
+  var hd = geo.rad(navigator_.heading || 0);
+  return toScreenOffset(Math.sin(hd), -Math.cos(hd), heading);
+}
+
 function navNeedsRender(t) {
   var st = navState, sh = st.shown, w = wimg;
   if (!sh || !w || w.zoom !== t.zoom || sh.follow !== t.follow || sh.overview !== st.overview) return true;
   if (angleDiff(w.heading, t.heading) > 15) return true;
-  // how far the focus point has slid inside the picture
+  // how much picture is left around the whole screen (cards may be hidden)
   var fv = toScreenOffset(t.focus[0] - w.c[0], t.focus[1] - w.c[1], w.heading);
   var mx = (w.w - st.w) / 2, my = (w.h - st.h) / 2;
-  var ahead = 0.22 * st.h;   // the picture reaches this much further ahead of the focus
-  var v = [fv[0], fv[1] - (sh.follow ? ahead : 0)];
-  return Math.abs(v[0]) > mx + 0.12 * st.w || v[1] < -(my + ahead - 4) || v[1] > my + 0.15 * st.h;
+  var left = mx + fv[0], right = mx - fv[0], top = my + fv[1], bottom = my - fv[1];
+  if (Math.min(left, right, top, bottom) < 0) return true;
+  if (sh.follow && (mx > 8 || my > 8)) {
+    var d = travelDir(w.heading);
+    var ahead = Math.abs(d[1]) >= Math.abs(d[0]) ? (d[1] < 0 ? top : bottom) : (d[0] < 0 ? left : right);
+    if (ahead < 8) return true;
+  }
+  return false;
 }
 
 function navRender(force) {
@@ -813,10 +831,16 @@ function navRender(force) {
   // keep the picture's turn while the heading only drifts a little: the watch can then just slide it
   var heading = t.heading;
   if (wimg && wimg.zoom === t.zoom && angleDiff(wimg.heading, heading) <= 15) heading = wimg.heading;
-  // picture center: a little further ahead than the focus, so there is map in front of you
-  var shift = t.follow ? toWorld(0, -0.22 * st.h, heading) : [0, 0];
-  var c = [t.focus[0] + shift[0], t.focus[1] + shift[1]];
+  // picture center: shifted toward where you're going, so the spare picture is in front of
+  // you, while still covering the whole screen behind (even with the cards hidden)
   var os = outSize(st.w, st.h);
+  var c = t.focus;
+  if (t.follow) {
+    var dir = travelDir(heading);
+    var ax = Math.max(0, (os[0] - st.w) / 2 - 6), ay = Math.max(0, (os[1] - st.h) / 2 - 6);
+    var off = toWorld(dir[0] * ax, dir[1] * ay, heading);
+    c = [t.focus[0] + off[0], t.focus[1] + off[1]];
+  }
   var plan = planImage(c, t.zoom, heading, os[0], os[1]);
   var seq = st.seq;
   var token = ++renderToken;
@@ -929,7 +953,7 @@ function onNavStart(p) {
   var mode = p.mode >= 0 && p.mode <= 3 ? p.mode : S.defaultMode;
   navState = { seq: p.seq, w: clampSize(p.width, p.height)[0], h: clampSize(p.width, p.height)[1],
     zoomDelta: 0, pan: null, panHeading: 0, overview: false, shown: null, streaming: false, pending: false,
-    headingUp: p.num !== 0 };
+    headingUp: p.num !== 0, voice: voiceOn };
   getRoute(mode, false, function (err, rt) {
     if (err) return sendError(err);
     navigator_ = new nav.Navigator({
@@ -937,6 +961,8 @@ function onNavStart(p) {
       view: { w: p.width > 0 ? p.width : watch.w, h: p.height > 0 ? p.height : watch.h - 100 },
       settings: S,
       send: navSend,
+      speak: function (text) { if (navState && navState.voice) voice.speak(text); },
+      prepare: function (texts) { if (navState && navState.voice) voice.prepare(texts); },
       reroute: function (pos, cb) {
         google.computeRoute(pos, rt.dest, mode, prefs(), true, function (e2, r) {
           if (e2) return cb(e2);
@@ -1025,6 +1051,7 @@ function onMessage(e) {
         watch.round = !!(p.mode & 2);
         watch.touch = !!(p.mode & 4);
         watch.inbox = p.idx > 0 ? p.idx : 4096;
+        voice.setInbox(watch.inbox);
         if (p.text && /^\d+,\d+$/.test(p.text)) {
           buf.w = parseInt(p.text.split(',')[0], 10);
           buf.h = parseInt(p.text.split(',')[1], 10);
@@ -1059,6 +1086,12 @@ function onMessage(e) {
       case CMD.SAVE_HERE: onSaveHere(); break;
       case CMD.MAP_ADJUST: onAdjust(p); break;
       case CMD.NAV_VIEW: onNavView(p); break;
+      case CMD.NAV_VOICE:
+        voiceOn = p.idx === 1;
+        if (navState) navState.voice = voiceOn;
+        if (voiceOn) voice.reset();
+        if (voiceOn && navigator_ && navigator_.lastDict) voice.speak('Voice directions on');
+        break;
       default:
         break;
     }

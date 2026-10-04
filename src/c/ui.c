@@ -408,6 +408,25 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       poly(ctx, r, 4, true);
       break;
     }
+    case ICON_VIBRATE: {
+      // a watch shaking: outline body with buzz marks either side
+      graphics_context_set_stroke_width(ctx, sw);
+      graphics_draw_round_rect(ctx, GRect(P(13, 7).x, P(13, 7).y, S(14), S(26)), S(3));
+      line(ctx, 6, 12, 6, 28);
+      line(ctx, 34, 12, 34, 28);
+      line(ctx, 1, 16, 1, 24);
+      line(ctx, 39, 16, 39, 24);
+      break;
+    }
+    case ICON_VOL_UP:
+    case ICON_VOL_DOWN: {
+      static const int8_t spk2[] = {2, 14, 9, 14, 18, 6, 18, 34, 9, 26, 2, 26};
+      poly(ctx, spk2, 6, true);
+      graphics_context_set_stroke_width(ctx, sw);
+      line(ctx, 24, 20, 38, 20);
+      if (id == ICON_VOL_UP) line(ctx, 31, 13, 31, 27);
+      break;
+    }
     case ICON_MUTE:
     case ICON_SOUND: {
       static const int8_t spk[] = {4, 14, 12, 14, 22, 5, 22, 35, 12, 26, 4, 26};

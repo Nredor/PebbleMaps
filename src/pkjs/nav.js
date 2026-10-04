@@ -2,6 +2,7 @@
 var P = require('./protocol');
 var geo = require('./geo');
 var fmt = require('./format');
+var brief = require('./brief');
 
 var MAN_MAP = {
   TURN_SLIGHT_LEFT: P.MAN.SLIGHT_LEFT, TURN_SHARP_LEFT: P.MAN.SHARP_LEFT, UTURN_LEFT: P.MAN.UTURN_LEFT,
@@ -74,6 +75,8 @@ function buildRoute(r, mode, dest) {
       }
       steps.push({
         instruction: instr || 'Continue',
+        short: tr ? instr : brief.brief(instr, ni.maneuver),          // for the watch banner
+        spoken: tr ? instr : brief.brief(instr, ni.maneuver, true),   // for the voice
         man: man,
         startIdx: startIdx,
         endIdx: points.length - 1,
@@ -137,6 +140,10 @@ function Navigator(opts) {
   this.send = opts.send;             // function(dict)
   this.reroute = opts.reroute;       // function(position, cb(err, route))
   this.onArrive = opts.onArrive;
+  this.speak = opts.speak || function () {};      // speak(text) when voice is on
+  this.prepare = opts.prepare || function () {};  // prepare([texts]) ahead of time
+  this.preparedKey = '';
+  this.spokeStart = false;
   this.lastIdx = 0;
   this.offCount = 0;
   this.alerts = {};
@@ -155,6 +162,7 @@ Navigator.prototype.setRoute = function (route) {
   this.offCount = 0;
   this.alerts = {};
   this.rerouting = false;
+  this.preparedKey = '';
 };
 
 // Snap position (lat,lng) to the route. Returns {idx, t, s, off}
@@ -247,6 +255,7 @@ Navigator.prototype.update = function (pos, accuracy) {
   if (this.offCount >= 3 && !this.rerouting && now - this.lastReroute > 15000) {
     this.rerouting = true;
     this.lastReroute = now;
+    this.speak('Rerouting');
     this.reroute(pos, function (err, route) {
       self.rerouting = false;
       if (!err && route) {
@@ -267,34 +276,39 @@ Navigator.prototype.update = function (pos, accuracy) {
       cmd: P.CMD.NAV, text: (r.dest && r.dest.name) || 'Destination', text2: '', text3: '', text4: '',
       num: P.MAN.ARRIVE, idx: P.MAN.NONE, num2: Math.round(now / 1000), flags: P.NAV_FLAG.ARRIVED
     });
+    this.speak('You have arrived' + (r.dest && r.dest.name ? ' at ' + r.dest.name : ''));
     if (this.onArrive) this.onArrive();
     return;
   }
 
   // --- what to show
   var imperial = this.settings.imperial;
-  var text, man, distM, detail = '', alertKey;
+  var text, man, distM, detail = '', alertKey, say = '';
   var next = r.steps[k + 1];
   if (step && step.transit) {
     var t = step.transit;
     distM = step.endDist - snap.s;
     man = t.icon;
     text = 'Ride ' + t.line + ' · get off at ' + (t.to || 'your stop');
+    say = 'Get off at ' + (t.to || 'your stop');
     detail = t.stops + ' stops' + (t.arrives ? ' · arrive ' + t.arrives : '');
     flags |= P.NAV_FLAG.TRANSIT;
     alertKey = 'exit' + k;
   } else if (k === 0 && snap.s < 25 && step) {
     distM = step.endDist - snap.s;
     man = P.MAN.DEPART;
-    text = step.instruction;
+    text = step.short || step.instruction;
+    say = step.spoken || step.instruction;
     alertKey = 'start';
   } else if (next) {
     distM = step.endDist - snap.s;
     man = next.man;
-    text = next.instruction;
+    text = next.short || next.instruction;
+    say = next.spoken || next.instruction;
     if (next.transit) {
       var nt = next.transit;
       text = 'Board ' + nt.line + (nt.headsign ? ' toward ' + nt.headsign : '') + ' at ' + (nt.from || 'the stop');
+      say = 'Board ' + nt.line + (nt.headsign ? ' toward ' + nt.headsign : '');
       detail = nt.departs ? 'Departs ' + nt.departs : '';
       flags |= P.NAV_FLAG.TRANSIT;
     }
@@ -303,6 +317,7 @@ Navigator.prototype.update = function (pos, accuracy) {
     distM = toEnd;
     man = P.MAN.ARRIVE;
     text = 'Arrive at ' + ((r.dest && r.dest.name) || 'destination');
+    say = 'Your destination is ahead';
     alertKey = 'arrive';
   }
   distM = Math.max(0, distM);
@@ -320,12 +335,24 @@ Navigator.prototype.update = function (pos, accuracy) {
   var al = this.alerts[alertKey];
   var soonAt = step && step.transit ? 700 : th.soon;
   var nowAt = step && step.transit ? 200 : th.now;
+  // voice: the "soon" line uses the alert distance so it can be prepared in advance
+  var soonText = 'In ' + brief.spokenDistance(fmt.distance(soonAt, imperial, true)) + ', ' + say;
+  if (this.preparedKey !== alertKey) {
+    this.preparedKey = alertKey;
+    this.prepare([say, soonText]);
+  }
+  if (!this.spokeStart) {
+    this.spokeStart = true;
+    if (step && k === 0) this.speak(step.spoken || step.instruction);
+  }
   if (distM <= nowAt && !al.now) {
     al.now = al.soon = true;
     flags |= P.NAV_FLAG.ALERT_NOW;
+    this.speak(say);
   } else if (distM <= soonAt && !al.soon && (step ? step.endDist - step.startDist : 0) > soonAt * 1.3) {
     al.soon = true;
     flags |= P.NAV_FLAG.ALERT_SOON;
+    this.speak(distM > soonAt * 0.6 ? soonText : 'In ' + brief.spokenDistance(fmt.distance(distM, imperial, true)) + ', ' + say);
   }
 
   if (distM <= soonAt * 1.15) flags |= P.NAV_FLAG.NEAR;
@@ -334,7 +361,7 @@ Navigator.prototype.update = function (pos, accuracy) {
 
   var dict = {
     cmd: P.CMD.NAV,
-    text: fmt.clip(text, 110),
+    text: fmt.clip(text, 80),
     text2: fmt.distance(distM, imperial, true),
     text3: fmt.duration(remain) + ' · ' + fmt.distance(toEnd, imperial),
     text4: fmt.clip(detail, 60),
