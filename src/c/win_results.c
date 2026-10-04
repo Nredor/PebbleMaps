@@ -139,7 +139,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
   }
   if (s_bar.open) mapbar_draw(&s_bar, ctx, b);
-  else if (s_count) draw_side_tab(ctx, GRect(0, 0, b.size.w, b.size.h - card.size.h));
+  else if (s_count) draw_side_tab(ctx, b);   // always beside the middle button
 }
 
 // --- List mode -------------------------------------------------------------

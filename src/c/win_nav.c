@@ -49,6 +49,14 @@ static bool cards_visible(void) {
 // --- Layout helpers -------------------------------------------------------------
 static int icon_size(void) { return g_fonts.level >= 1 ? 38 : 30; }
 
+#ifndef PBL_ROUND
+// The instruction text area: measured and drawn with the same box so the banner fits it exactly
+static GRect banner_text_rect(GRect b, int h) {
+  int col = icon_size() + 16;
+  return GRect(col, -3, b.size.w - col - 3, h);
+}
+#endif
+
 static int banner_h(GRect b) {
 #ifdef PBL_ROUND
   GSize ts = graphics_text_layout_get_content_size(s_instr, g_fonts.small_b, GRect(0, 0, b.size.w - 50, 100),
@@ -56,11 +64,10 @@ static int banner_h(GRect b) {
   int h = 40 + ts.h + 8;
   return clampi(h, 70, b.size.h * 45 / 100);
 #else
-  int col = icon_size() + 16;
-  GSize ts = graphics_text_layout_get_content_size(s_instr, g_fonts.body_b, GRect(0, 0, b.size.w - col - 4, 200),
+  GSize ts = graphics_text_layout_get_content_size(s_instr, g_fonts.body_b, banner_text_rect(b, 200),
                                                    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
   int left = icon_size() + g_fonts.small_h + 8;
-  int h = ts.h + 8 > left ? ts.h + 8 : left;
+  int h = ts.h + 6 > left ? ts.h + 6 : left;
   return clampi(h, left, b.size.h * 42 / 100);
 #endif
 }
@@ -173,7 +180,7 @@ static void draw_banner(GContext *ctx, GRect b, int bh) {
   graphics_draw_text(ctx, s_dist, g_fonts.small_b, GRect(0, isz + 2, col, g_fonts.small_h + 4),
                      GTextOverflowModeFill, GTextAlignmentCenter, NULL);
   GFont f = g_fonts.body_b;
-  GRect tr = GRect(col, -3, b.size.w - col - 3, bh);
+  GRect tr = banner_text_rect(b, bh + 3);
   GSize ts = graphics_text_layout_get_content_size(text, f, tr, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
   if (ts.h > bh) f = g_fonts.small_b;
   graphics_draw_text(ctx, text, f, tr, GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
@@ -290,7 +297,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   }
   if (s_bar.open) mapbar_draw(&s_bar, ctx, b);
   else if (s_menu_open) draw_menu(ctx, b);
-  else draw_side_tab(ctx, GRect(0, top, b.size.w, b.size.h - top - bot));
+  else draw_side_tab(ctx, b);   // always beside the middle button
   if (s_muted && !s_menu_open && !s_bar.open && cards) {
     icon_draw(ctx, ICON_MUTE, GPoint(b.size.w - PBL_IF_ROUND_ELSE(40, 12), b.size.h - bot - 12), 14, C_RED, C_BG);
   }

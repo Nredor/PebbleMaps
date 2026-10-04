@@ -165,13 +165,33 @@ var renderToken = 0;
 var refreshFn = null;
 var refreshTimer = null;
 
-function scheduleRefresh() {
-  if (refreshTimer || !refreshFn) return;
-  refreshTimer = setTimeout(function () {
-    refreshTimer = null;
-    if (wimg) wimg.valid = false;
+// If a map picture couldn't be fetched or delivered (network blip, watch out of
+// range), try again by itself: soon at first, then less often, until it works.
+var retryTimer = null;
+var retryCount = 0;
+
+function retryLater(err) {
+  if (err && err.code === P.ERR.NO_KEY) return;
+  if (retryTimer || !refreshFn) return;
+  var network = !err || err.code === P.ERR.NETWORK;
+  if (!network && retryCount >= 4) return;   // a real Google error: don't keep asking
+  var delay = Math.min(30000, 1500 * Math.pow(2, Math.min(retryCount, 5)));
+  retryCount++;
+  console.log('map retry in ' + delay + ' ms');
+  retryTimer = setTimeout(function () {
+    retryTimer = null;
     if (refreshFn) refreshFn();
-  }, 400);
+  }, delay);
+}
+
+function mapWorked() {
+  retryCount = 0;
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+}
+
+function scheduleRefresh() {
+  if (wimg) wimg.valid = false;
+  retryLater({ code: P.ERR.NETWORK });
 }
 
 // The watch zooms its picture the moment the button is pressed; keep our copy in step
@@ -317,10 +337,16 @@ function streamMap(seq, view, markers, done, quiet) {
     if (token !== renderToken || seq !== currentMapSeq) { if (done) done({ stale: true }); return; }
     if (err) {
       console.log('map error ' + JSON.stringify(err));
-      if (!quiet && (err.code === P.ERR.NO_KEY || err.title)) sendError(err);
+      // a network blip: a small note, then keep retrying quietly; real problems get the error screen once
+      if (!quiet && retryCount === 0) {
+        if (err.code === P.ERR.NETWORK) toast('No connection. Retrying...');
+        else if (err.code === P.ERR.NO_KEY || err.title) sendError(err);
+      }
       if (done) done(err);
+      retryLater(err);
       return;
     }
+    mapWorked();
     pushImage(seq, img, plan, { zoom: view.zoom, heading: 0, key: tiles.styleKey(o) }, markers, {
       ack: true,
       onBegin: function () { if (done) done(null); }
@@ -809,7 +835,8 @@ function navRender(force) {
   };
   tiles.get(o, function (err, img) {
     if (!navState || navState.seq !== seq || token !== renderToken) return;
-    if (err) { navState.streaming = false; return; }
+    if (err) { navState.streaming = false; retryLater(err); return; }
+    mapWorked();
     pushImage(seq, img, plan, { zoom: t.zoom, heading: heading, key: tiles.styleKey(o) }, null, {
       onBegin: function () {
         navState.shown = view;
