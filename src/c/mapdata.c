@@ -15,10 +15,30 @@ static GSize s_buf_size;
 static GColor s_palette[16];
 #endif
 
+static uint32_t buf_bytes(int w, int h) {
+#ifdef PBL_COLOR
+  return (uint32_t)((w + 1) / 2) * h;
+#else
+  return (uint32_t)((w + 31) / 32) * 4 * h;
+#endif
+}
+
+GSize map_buffer_size(void) { return s_buf_size; }
+
 void map_reserve(void) {
   if (s_buf) return;
-  GRect b = layer_get_unobstructed_bounds(window_get_root_layer(window_stack_get_top_window()));
-  s_buf_size = b.size;
+  // Screen size plus a margin all round when memory allows, so panning
+  // shows real map straight away (Pebble Time 2, Round 2, Pebble 2).
+  int sw = PBL_DISPLAY_WIDTH, sh = PBL_DISPLAY_HEIGHT;
+  int free_now = (int)heap_bytes_free();
+  int base = (int)buf_bytes(sw, sh);
+  int keep = free_now > 60000 ? 30000 : 10000;   // memory left for screens and lists
+  int avail = free_now - base - keep;
+  int m = (sw > sh ? sw : sh) / 3;
+  while (m > 0 && (int)buf_bytes(sw + 2 * m, sh + 2 * m) - base > avail) m -= 4;
+  if (m < 0) m = 0;
+  s_buf_size = GSize(sw + 2 * m, sh + 2 * m);
+  APP_LOG(APP_LOG_LEVEL_INFO, "map buffer %dx%d (free before %d)", s_buf_size.w, s_buf_size.h, free_now);
 #ifdef PBL_COLOR
   memset(s_palette, 0xFF, sizeof(s_palette));
   s_buf = gbitmap_create_blank_with_palette(s_buf_size, GBitmapFormat4BitPalette, s_palette, false);
@@ -64,6 +84,12 @@ void map_adjust(int action, int dx, int dy) {
   m.height = dy;
   comm_send(&m);
   notify();
+}
+
+int map_new_seq(void) {
+  g_map.seq = s_next_seq++;
+  if (s_next_seq > 30000) s_next_seq = 1;
+  return g_map.seq;
 }
 
 int map_request(int cmd, int w, int h, int idx, int mode) {

@@ -31,6 +31,10 @@ void map_set_observer(Layer *layer);
 void map_release(void);
 // Reserve the shared picture buffer (call once at start-up)
 void map_reserve(void);
+// Size of the reserved picture buffer (screen plus margin)
+GSize map_buffer_size(void);
+// Start a new request id without asking for anything (keeps the picture)
+int map_new_seq(void);
 void map_handle(int cmd, DictionaryIterator *it);
 // Pan/zoom the current map (keeps the old picture, shifted, until the new one arrives)
 void map_adjust(int action, int dx, int dy);

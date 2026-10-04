@@ -473,6 +473,24 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       }
       break;
     }
+    case ICON_NORTH: {
+      // compass needle: dark tip north, hollow tail south, inside a ring
+      graphics_context_set_stroke_width(ctx, sw > 1 ? sw - 1 : 1);
+      circle(ctx, 20, 20, 18, false);
+      static const int8_t tip[] = {20, 4, 26, 20, 14, 20};
+      static const int8_t tail[] = {14, 20, 26, 20, 20, 36};
+      poly(ctx, tip, 3, true);
+      graphics_context_set_stroke_width(ctx, 1);
+      poly(ctx, tail, 3, false);
+      break;
+    }
+    case ICON_HEADING: {
+      graphics_context_set_stroke_width(ctx, sw > 1 ? sw - 1 : 1);
+      circle(ctx, 20, 20, 18, false);
+      static const int8_t arrow[] = {20, 7, 30, 31, 20, 25, 10, 31};
+      poly(ctx, arrow, 4, true);
+      break;
+    }
     case ICON_STOP:
       circle(ctx, 20, 20, 18, true);
       graphics_context_set_stroke_color(ctx, bg);

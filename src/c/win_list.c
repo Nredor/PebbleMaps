@@ -291,6 +291,11 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   bool hl = menu_cell_layer_is_highlighted(cell);
   GColor fg = hl ? GColorWhite : C_TEXT;
   GColor sub_fg = hl ? GColorWhite : C_SUBTEXT;
+  // divider under each row
+  if (!hl) {
+    graphics_context_set_stroke_color(ctx, C_DIVIDER);
+    graphics_draw_line(ctx, GPoint(PBL_IF_ROUND_ELSE(24, 6), b.size.h - 1), GPoint(b.size.w - PBL_IF_ROUND_ELSE(24, 6), b.size.h - 1));
+  }
 #ifdef PBL_COLOR
   bool keep_color = (icon == ICON_STAR);
 #else
@@ -462,6 +467,7 @@ static void window_load(Window *window) {
   layer_add_child(root, lw->header);
   top += HEADER_H;
 #endif
+  top += PBL_IF_ROUND_ELSE(0, 4);   // breathing room under the title bar
   lw->menu = menu_layer_create(GRect(0, top, b.size.w, b.size.h - top));
   menu_layer_set_callbacks(lw->menu, lw, (MenuLayerCallbacks){
     .get_num_sections = num_sections,

@@ -15,6 +15,7 @@ var Clay = require('./vendor/clay');
 var clayConfig = require('./clay-config');
 var clayComponents = require('./clay-components');
 var dev = require('./dev');
+var tiles = require('./tiles');
 
 var CMD = P.CMD;
 
@@ -39,7 +40,7 @@ var watchId = null;
 var simTimer = null;
 var gpsTimer = null;
 var currentMapSeq = 0;
-var imageCache = [];      // [{url, img}]
+
 var S = settings.get();
 
 function reloadSettings() {
@@ -119,23 +120,13 @@ function mapStyle() {
   return S.mapStyle === 'dark' ? 'dark' : 'light';
 }
 
-function getImage(opts, cb) {
-  var u = google.staticMapUrl(opts) + '#' + watch.fmt;
-  for (var i = 0; i < imageCache.length; i++) {
-    if (imageCache[i].url === u) return cb(null, imageCache[i].img);
-  }
-  google.staticMap(opts, function (err, bytes) {
-    if (err) return cb(err);
-    var img;
-    try {
-      img = image.convert(image.decodePNG(bytes), watch.fmt);
-    } catch (e) {
-      return cb({ code: P.ERR.API, title: 'Map problem', text: 'Couldn\'t read the map picture from Google (' + e.message + ').' });
-    }
-    imageCache.unshift({ url: u, img: img });
-    if (imageCache.length > 6) imageCache.pop();
-    cb(null, img);
-  });
+// The watch keeps one picture buffer; on roomier watches it is bigger than the
+// screen so panning shows real map right away.
+var buf = { w: 144, h: 168 };
+
+function outSize(fw, fh) {
+  var m = Math.max(0, Math.min(Math.floor((buf.w - fw) / 2), Math.floor((buf.h - fh) / 2)));
+  return [fw + 2 * m, fh + 2 * m];
 }
 
 function encodeMarkers(list) {
@@ -149,17 +140,42 @@ function encodeMarkers(list) {
 
 function markerFor(p, view, kind, index) {
   var s = geo.toScreen(p, view.center, view.zoom, view.w, view.h);
-  if (s[0] < -30 || s[1] < -30 || s[0] > view.w + 30 || s[1] > view.h + 30) return null;
+  var os = outSize(view.w, view.h);
+  var mx = (os[0] - view.w) / 2 + 30, my = (os[1] - view.h) / 2 + 30;
+  if (s[0] < -mx || s[1] < -my || s[0] > view.w + mx || s[1] > view.h + my) return null;
   return { x: s[0], y: s[1], kind: kind, index: index || 0 };
 }
 
-// view: {center, zoom, w, h, path?, gmarkers?}; markers: array of {x,y,kind,index} or null
-// done(err) is called once the picture starts streaming (or failed)
+function sendImage(seq, img, markers, onBegin, onFinished) {
+  send({
+    cmd: CMD.MAP_BEGIN, seq: seq, width: img.width, height: img.height, fmt: img.format,
+    stride: img.stride, palette: img.palette, total: img.data.length
+  }, 'map:' + seq);
+  if (markers) {
+    var mk = encodeMarkers(markers.filter(Boolean));
+    if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
+    else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
+  }
+  if (onBegin) onBegin();
+  var rows = Math.max(1, Math.floor((watch.inbox - 80) / img.stride));
+  var chunk = rows * img.stride;
+  for (var off = 0; off < img.data.length; off += chunk) {
+    var part = img.data.subarray(off, Math.min(img.data.length, off + chunk));
+    var last = off + chunk >= img.data.length;
+    msg.send({ cmd: CMD.MAP_CHUNK, seq: seq, offset: off, data: Array.prototype.slice.call(part) }, 'map:' + seq,
+      last ? onFinished : null);
+  }
+}
+
+// view: {center, zoom, w, h (screen area), heading?, path?, gmarkers?}
+// markers: array of {x,y,kind,index} or null. done(err) once the picture starts streaming.
 function streamMap(seq, view, markers, done, quiet) {
   currentMapSeq = seq;
   msg.drop('map:');
-  getImage({ center: view.center, zoom: view.zoom, w: view.w, h: view.h, style: mapStyle(), path: view.path,
-    markers: view.gmarkers }, function (err, img) {
+  var os = outSize(view.w, view.h);
+  var o = { center: view.center, zoom: view.zoom, w: os[0], h: os[1], heading: view.heading || 0,
+            style: mapStyle(), format: watch.fmt, path: view.path, markers: view.gmarkers };
+  tiles.get(o, function (err, img) {
     if (seq !== currentMapSeq) { if (done) done({ stale: true }); return; }
     if (err) {
       console.log('map error ' + JSON.stringify(err));
@@ -167,22 +183,8 @@ function streamMap(seq, view, markers, done, quiet) {
       if (done) done(err);
       return;
     }
-    send({
-      cmd: CMD.MAP_BEGIN, seq: seq, width: img.width, height: img.height, fmt: img.format,
-      stride: img.stride, palette: img.palette, total: img.data.length
-    }, 'map:' + seq);
-    if (markers) {
-      var mk = encodeMarkers(markers.filter(Boolean));
-      if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
-      else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
-    }
-    if (done) done(null);
-    var rows = Math.max(1, Math.floor((watch.inbox - 80) / img.stride));
-    var chunk = rows * img.stride;
-    for (var off = 0; off < img.data.length; off += chunk) {
-      var part = img.data.subarray(off, Math.min(img.data.length, off + chunk));
-      send({ cmd: CMD.MAP_CHUNK, seq: seq, offset: off, data: Array.prototype.slice.call(part) }, 'map:' + seq);
-    }
+    sendImage(seq, img, markers, function () { if (done) done(null); });
+    tiles.prefetchAround(o, true);
   });
 }
 
@@ -494,89 +496,130 @@ function onSteps() {
 }
 
 // --- Navigation ------------------------------------------------------------
-// The navigation map follows you. It is a Google map picture centered a bit
-// ahead of you; the watch slides it under your position arrow and asks for a
-// new picture only when you get near its edge.
+// The navigation map follows you. The phone cuts it out of a big Google
+// picture, turned so your direction of travel points up (or north-up), and
+// sends a fresh one only when you turn or get near its edge. In between, the
+// watch slides the picture under your position arrow.
 var navState = null;
 
 function navBaseZoom(mode) {
   return mode === P.MODE.DRIVE ? 16 : (mode === P.MODE.WALK ? 17 : 16);
 }
 
+function angleDiff(a, b) {
+  return Math.abs(((a - b + 540) % 360) - 180);
+}
+
+// screen offset (dx,dy) -> world offset, for a picture turned to heading h
+function toWorld(dx, dy, h) {
+  var a = geo.rad(h), c = Math.cos(a), s = Math.sin(a);
+  return [dx * c - dy * s, dx * s + dy * c];
+}
+function toScreenOffset(wx, wy, h) {
+  var a = geo.rad(h), c = Math.cos(a), s = Math.sin(a);
+  return [wx * c + wy * s, -wx * s + wy * c];
+}
+
+function navZoom() {
+  return Math.max(3, Math.min(20, navBaseZoom(navigator_.route.mode) + navState.zoomDelta));
+}
+
+// Where the screen should be focused right now (world pixels) and the picture turn
+function navTarget() {
+  var st = navState, r = navigator_.route;
+  if (st.overview) {
+    var pts = r.points.length ? r.points : [navigator_.pos];
+    var fit = geo.fitBounds(pts, st.w, st.h, { top: 24, bottom: 24, left: 16, right: 16 }, 17);
+    return { zoom: fit.zoom, focus: geo.project(fit.center[0], fit.center[1], fit.zoom), heading: 0, follow: false };
+  }
+  var z = navZoom();
+  var heading = st.headingUp ? (navigator_.heading || 0) : 0;
+  if (st.pan) {
+    return { zoom: z, focus: geo.project(st.pan[0], st.pan[1], z), heading: st.panHeading, follow: false };
+  }
+  // look ahead: your arrow sits a bit below the middle
+  var pos = geo.project(navigator_.pos[0], navigator_.pos[1], z);
+  var hd = geo.rad(navigator_.heading || 0);
+  var ahead = 0.10 * st.h;
+  return { zoom: z, focus: [pos[0] + Math.sin(hd) * ahead, pos[1] - Math.cos(hd) * ahead], heading: heading, follow: true };
+}
+
+// Fill NAV message with arrow / focus positions inside the picture the watch has
 function navAugment(d) {
   var st = navState;
   if (!st || !st.shown || !navigator_ || !navigator_.pos) return d;
   var sh = st.shown;
-  var pk = geo.toScreen(navigator_.pos, sh.center, sh.zoom, sh.w, sh.h);
-  d.width = pk[0];
-  d.height = pk[1];
-  if (sh.follow) {
-    d.stride = pk[0];
-    d.total = pk[1];
+  var pos = geo.project(navigator_.pos[0], navigator_.pos[1], sh.zoom);
+  var pv = toScreenOffset(pos[0] - sh.c[0], pos[1] - sh.c[1], sh.heading);
+  d.width = Math.round(pv[0] + sh.ow / 2);
+  d.height = Math.round(pv[1] + sh.oh / 2);
+  var t = navTarget();
+  if (t.zoom === sh.zoom && !st.overview) {
+    var fv = toScreenOffset(t.focus[0] - sh.c[0], t.focus[1] - sh.c[1], sh.heading);
+    d.stride = Math.round(fv[0] + sh.ow / 2);
+    d.total = Math.round(fv[1] + sh.oh / 2);
   } else {
-    d.stride = Math.round(sh.w / 2);
-    d.total = Math.round(sh.h / 2);
+    d.stride = Math.round(sh.ow / 2);
+    d.total = Math.round(sh.oh / 2);
   }
-  d.offset = Math.round(navigator_.heading || 0);
+  d.offset = Math.round(((navigator_.heading || 0) - sh.heading + 360) % 360);
+  d.mode = Math.round(sh.heading) % 360;
   return d;
 }
 
-function navWanted() {
-  var st = navState, r = navigator_.route;
-  var w = st.w, h = st.h;
-  var z = Math.max(3, Math.min(20, navBaseZoom(r.mode) + st.zoomDelta));
-  if (st.overview) {
-    var pts = r.points.length ? r.points : [navigator_.pos];
-    var fit = geo.fitBounds(pts, w, h, { top: 24, bottom: 24, left: 16, right: 16 }, 17);
-    return { center: fit.center, zoom: fit.zoom, follow: false };
-  }
-  if (st.pan) return { center: st.pan, zoom: z, follow: false };
-  var pos = navigator_.pos;
-  var look = 0.22 * Math.min(w, h);
-  var q = geo.project(pos[0], pos[1], z);
-  var hd = geo.rad(navigator_.heading || 0);
-  return { center: geo.unproject(q[0] + Math.sin(hd) * look, q[1] - Math.cos(hd) * look, z), zoom: z, follow: true };
+function navNeedsRender(t) {
+  var st = navState, sh = st.shown;
+  if (!sh || sh.zoom !== t.zoom || sh.follow !== t.follow || sh.overview !== st.overview) return true;
+  if (angleDiff(sh.heading, t.heading) > 15) return true;
+  // how far the focus point has slid inside the picture
+  var v = toScreenOffset(t.focus[0] - sh.focus[0], t.focus[1] - sh.focus[1], sh.heading);
+  var mx = (sh.ow - st.w) / 2, my = (sh.oh - st.h) / 2;
+  var ahead = 0.22 * st.h;   // the picture reaches this much further ahead
+  return Math.abs(v[0]) > mx + 0.12 * st.w || v[1] < -(my + ahead - 4) || v[1] > my + 0.15 * st.h;
 }
 
-function navMaybeFetch(force) {
+function navRender(force) {
   var st = navState;
   if (!st || !navigator_ || !navigator_.pos || navigator_.arrived) return;
-  var want = navWanted();
-  var sh = st.shown;
-  if (!force && sh) {
-    if (st.fetching) return;
-    if (want.follow && sh.follow && sh.zoom === want.zoom) {
-      var pk = geo.toScreen(navigator_.pos, sh.center, sh.zoom, sh.w, sh.h);
-      var dx = pk[0] - sh.w / 2, dy = pk[1] - sh.h / 2;
-      if (Math.sqrt(dx * dx + dy * dy) < 0.3 * Math.min(sh.w, sh.h)) return;
-      if (Date.now() - st.lastFetch < 3000) return;
-    } else if (!want.follow && !sh.follow && sh.zoom === want.zoom &&
-               Math.abs(sh.center[0] - want.center[0]) < 1e-7 && Math.abs(sh.center[1] - want.center[1]) < 1e-7) {
-      return;
-    }
-  }
+  var t = navTarget();
+  if (!force && !navNeedsRender(t)) return;
+  if (st.streaming && !force) { st.pending = true; return; }
   var r = navigator_.route;
   var d = r.dest;
-  var view = {
-    center: want.center, zoom: want.zoom, w: st.w, h: st.h, follow: want.follow,
-    path: geo.thin(r.points, 300),
-    gmarkers: d ? ['size:small|color:red|' + d.lat.toFixed(6) + ',' + d.lng.toFixed(6)] : null
-  };
-  st.fetching = true;
-  st.lastFetch = Date.now();
+  // picture center: a little further ahead than the focus, so there is map in front of you
+  var shift = t.follow ? toWorld(0, -0.22 * st.h, t.heading) : [0, 0];
+  var c = [t.focus[0] + shift[0], t.focus[1] + shift[1]];
+  var os = outSize(st.w, st.h);
   var seq = st.seq;
-  streamMap(seq, view, null, function (err) {
+  st.streaming = true;
+  st.pending = false;
+  clearTimeout(st.streamTimer);
+  st.streamTimer = setTimeout(function () { if (navState) navState.streaming = false; }, 9000);
+  var view = { c: c, zoom: t.zoom, heading: t.heading, ow: os[0], oh: os[1], focus: t.focus, follow: t.follow, overview: st.overview };
+  currentMapSeq = seq;
+  msg.drop('map:');
+  tiles.get({
+    center: geo.unproject(c[0], c[1], t.zoom), zoom: t.zoom, w: os[0], h: os[1], heading: t.heading,
+    style: mapStyle(), format: watch.fmt, path: geo.thin(r.points, 300),
+    markers: d ? ['size:small|color:red|' + d.lat.toFixed(6) + ',' + d.lng.toFixed(6)] : null,
+    ahead: t.follow ? toWorld(0, -1, navigator_.heading || 0) : null
+  }, function (err, img) {
     if (!navState || navState.seq !== seq) return;
-    navState.fetching = false;
-    if (err) return;
-    navState.shown = view;
-    if (navigator_ && navigator_.lastDict) send(navAugment(JSON.parse(JSON.stringify(navigator_.lastDict))), 'nav');
-  }, true);
+    if (err) { navState.streaming = false; return; }
+    sendImage(seq, img, null, function () {
+      navState.shown = view;
+      if (navigator_ && navigator_.lastDict) send(navAugment(JSON.parse(JSON.stringify(navigator_.lastDict))), 'nav');
+    }, function () {
+      if (!navState) return;
+      navState.streaming = false;
+      if (navState.pending) navRender(false);
+    });
+  });
 }
 
 function navSend(d) {
   if (d.cmd === CMD.NAV && !(d.flags & P.NAV_FLAG.ARRIVED)) {
-    navMaybeFetch(false);
+    navRender(false);
     navAugment(d);
   }
   send(d, 'nav');
@@ -586,22 +629,33 @@ function navAdjust(p) {
   var st = navState;
   if (!navigator_ || !navigator_.pos) return;
   st.seq = p.seq;
-  var z = Math.max(3, Math.min(20, navBaseZoom(navigator_.route.mode) + st.zoomDelta));
   switch (p.idx) {
     case P.ADJ.ZOOM_IN: st.zoomDelta = Math.min(4, st.zoomDelta + 1); break;
     case P.ADJ.ZOOM_OUT: st.zoomDelta = Math.max(-6, st.zoomDelta - 1); break;
     case P.ADJ.PAN: {
-      var from = st.pan || (st.overview && st.shown ? st.shown.center : navigator_.pos);
-      var zz = st.overview && st.shown ? st.shown.zoom : z;
-      var q = geo.project(from[0], from[1], zz);
-      st.pan = geo.unproject(q[0] + (p.width || 0), q[1] + (p.height || 0), zz);
-      if (st.overview) { st.zoomDelta = zz - navBaseZoom(navigator_.route.mode); st.overview = false; }
+      var t = navTarget();
+      var sh = st.shown;
+      var h = sh ? sh.heading : t.heading;
+      var w = toWorld(p.width || 0, p.height || 0, h);
+      var z = t.zoom;
+      if (st.overview) { st.zoomDelta = z - navBaseZoom(navigator_.route.mode); st.overview = false; }
+      st.pan = geo.unproject(t.focus[0] + w[0], t.focus[1] + w[1], z);
+      st.panHeading = h;
       break;
     }
     case P.ADJ.FIT_ROUTE: st.overview = true; st.pan = null; break;
     default: st.pan = null; st.overview = false; break;
   }
-  navMaybeFetch(true);
+  st.streaming = false;
+  navRender(true);
+}
+
+function onNavView(p) {
+  if (!navState) return;
+  navState.headingUp = p.idx === 1;
+  if (p.seq !== undefined) navState.seq = p.seq;
+  navState.streaming = false;
+  navRender(true);
 }
 
 function stopNav() {
@@ -612,6 +666,7 @@ function stopNav() {
   if (simTimer) { clearInterval(simTimer); simTimer = null; }
   if (gpsTimer) { clearInterval(gpsTimer); gpsTimer = null; }
   navigator_ = null;
+  if (navState) clearTimeout(navState.streamTimer);
   navState = null;
 }
 
@@ -638,7 +693,8 @@ function onNavStart(p) {
   stopNav();
   var mode = p.mode >= 0 && p.mode <= 3 ? p.mode : S.defaultMode;
   navState = { seq: p.seq, w: clampSize(p.width, p.height)[0], h: clampSize(p.width, p.height)[1],
-    zoomDelta: 0, pan: null, overview: false, shown: null, fetching: false, lastFetch: 0 };
+    zoomDelta: 0, pan: null, panHeading: 0, overview: false, shown: null, streaming: false, pending: false,
+    headingUp: p.num !== 0 };
   getRoute(mode, false, function (err, rt) {
     if (err) return sendError(err);
     navigator_ = new nav.Navigator({
@@ -652,7 +708,7 @@ function onNavStart(p) {
           route = nav.buildRoute(r, mode, rt.dest);
           routeTime = Date.now();
           cb(null, route);
-          setTimeout(function () { navMaybeFetch(true); }, 0);  // redraw the new route line
+          setTimeout(function () { if (navState) { navState.streaming = false; navRender(true); } }, 0);  // redraw the new route line
         });
       },
       onArrive: function () {
@@ -734,6 +790,13 @@ function onMessage(e) {
         watch.round = !!(p.mode & 2);
         watch.touch = !!(p.mode & 4);
         watch.inbox = p.idx > 0 ? p.idx : 4096;
+        if (p.text && /^\d+,\d+$/.test(p.text)) {
+          buf.w = parseInt(p.text.split(',')[0], 10);
+          buf.h = parseInt(p.text.split(',')[1], 10);
+        } else {
+          buf.w = watch.w;
+          buf.h = watch.h;
+        }
         sendStatus();
         break;
       case CMD.HOME_MAP: onHomeMap(p); break;
@@ -759,6 +822,7 @@ function onMessage(e) {
         break;
       case CMD.SAVE_HERE: onSaveHere(); break;
       case CMD.MAP_ADJUST: onAdjust(p); break;
+      case CMD.NAV_VIEW: onNavView(p); break;
       default:
         break;
     }
@@ -806,7 +870,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
     return;
   }
   reloadSettings();
-  imageCache = [];
+  tiles.clear();
   route = null;
   sendStatus();
   if (google.hasKey() && S.apiKey !== oldKey) {

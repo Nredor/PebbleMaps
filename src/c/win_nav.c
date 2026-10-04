@@ -26,6 +26,9 @@ static time_t s_arrive;
 static GPoint s_puck, s_focus;
 static bool s_have_puck;
 static int s_heading;
+static int s_map_heading;     // which way is up on the current picture
+static bool s_heading_up = true;
+#define PERSIST_HEADING_UP 2
 static AppTimer *s_back_timer;
 static bool s_back_armed;
 
@@ -83,6 +86,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
         s_puck = GPoint(tuple_int(it, MESSAGE_KEY_width, 0), tuple_int(it, MESSAGE_KEY_height, 0));
         s_focus = GPoint(tuple_int(it, MESSAGE_KEY_stride, s_puck.x), tuple_int(it, MESSAGE_KEY_total, s_puck.y));
         s_heading = tuple_int(it, MESSAGE_KEY_offset, 0);
+        s_map_heading = tuple_int(it, MESSAGE_KEY_mode, 0);
       }
       bool was_arrived = s_arrived;
       s_arrived = (s_flags & NAV_ARRIVED) != 0;
@@ -116,6 +120,24 @@ static void draw_map(GContext *ctx, GRect b, GRect visible) {
     graphics_draw_bitmap_in_rect(ctx, g_map.bmp, GRect(origin.x, origin.y, g_map.w, g_map.h));
   }
   if (s_have_puck) draw_puck(ctx, GPoint(origin.x + s_puck.x, origin.y + s_puck.y), g_fonts.level >= 1 ? 9 : 7, s_heading);
+  // small compass: the red tip points north
+  if (s_have_puck) {
+    GPoint cc = GPoint(visible.origin.x + PBL_IF_ROUND_ELSE(visible.size.w / 2 - 50, 14), visible.origin.y + 14);
+    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_fill_circle(ctx, cc, 11);
+    graphics_context_set_stroke_color(ctx, C_DIVIDER);
+    graphics_draw_circle(ctx, cc, 11);
+    int32_t a = DEG_TO_TRIGANGLE(-s_map_heading);
+    int sx = sin_lookup(a) * 8 / TRIG_MAX_RATIO, sy = -cos_lookup(a) * 8 / TRIG_MAX_RATIO;
+    int px = cos_lookup(a) * 3 / TRIG_MAX_RATIO, py = sin_lookup(a) * 3 / TRIG_MAX_RATIO;
+    GPoint n[3] = { GPoint(cc.x + sx, cc.y + sy), GPoint(cc.x + px, cc.y + py), GPoint(cc.x - px, cc.y - py) };
+    GPoint so[3] = { GPoint(cc.x - sx, cc.y - sy), GPoint(cc.x + px, cc.y + py), GPoint(cc.x - px, cc.y - py) };
+    GPath pn = { .num_points = 3, .points = n }, ps = { .num_points = 3, .points = so };
+    graphics_context_set_fill_color(ctx, C_RED);
+    gpath_draw_filled(ctx, &pn);
+    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+    gpath_draw_filled(ctx, &ps);
+  }
 }
 
 static void draw_banner(GContext *ctx, GRect b, int bh) {
@@ -214,21 +236,29 @@ static void draw_menu(GContext *ctx, GRect b) {
   switch (s_menu_page) {
     case 0:
       ic.up = ICON_MOVE;
-      ic.down = s_muted ? ICON_MUTE : ICON_SOUND;
-      ic.down_color = s_muted ? C_RED : C_ICON;
+      ic.down = s_heading_up ? ICON_HEADING : ICON_NORTH;
+      ic.down_color = C_BLUE;
       break;
     case 1:
       ic.up = s_cards_hidden ? ICON_EYE : ICON_EYE_OFF;
-      ic.down = ICON_LIST;
+      ic.down = s_muted ? ICON_MUTE : ICON_SOUND;
+      ic.down_color = s_muted ? C_RED : C_ICON;
       break;
     default:
-      ic.up = ICON_MAP;
+      ic.up = ICON_LIST;
       ic.down = ICON_STOP;
-      ic.up_color = C_BLUE;
       ic.down_color = C_RED;
       break;
   }
   draw_action_strip(ctx, b, &ic);
+}
+
+static void send_view_mode(void) {
+  OutMsg m;
+  comm_msg_init(&m, CMD_NAV_VIEW);
+  m.idx = s_heading_up ? 1 : 0;
+  m.seq = map_new_seq();
+  comm_send(&m);
 }
 
 static void canvas_update(Layer *layer, GContext *ctx) {
@@ -295,10 +325,15 @@ static void bar_cb(MapBarEvent ev, void *ctx) {
   switch (ev) {
     case MB_EV_MOVED: s_moved = true; break;
     case MB_EV_EXTRA_UP: s_moved = false; map_adjust(ADJ_RESET, 0, 0); break;
-    case MB_EV_EXTRA_DOWN: mapbar_close(&s_bar); break;
+    case MB_EV_EXTRA_DOWN: s_moved = true; map_adjust(ADJ_FIT_ROUTE, 0, 0); break;
     case MB_EV_CLOSED: menu_close(); break;
   }
   if (s_canvas) layer_mark_dirty(s_canvas);
+}
+
+static void toggle_mute(void) {
+  s_muted = !s_muted;
+  ui_toast(s_window, s_muted ? "Turn alerts off" : "Turn alerts on");
 }
 
 static void menu_action(ButtonId b) {
@@ -311,22 +346,23 @@ static void menu_action(ButtonId b) {
       if (s_menu_timer) { app_timer_cancel(s_menu_timer); s_menu_timer = NULL; }
       mapbar_open(&s_bar);
     } else {
-      s_muted = !s_muted;
-      ui_toast(s_window, s_muted ? "Turn alerts off" : "Turn alerts on");
+      s_heading_up = !s_heading_up;
+      persist_write_bool(PERSIST_HEADING_UP, s_heading_up);
+      send_view_mode();
+      ui_toast(s_window, s_heading_up ? "Map turns with you" : "North up");
     }
   } else if (s_menu_page == 1) {
     if (b == BUTTON_ID_UP) {
       s_cards_hidden = !s_cards_hidden;
       ui_toast(s_window, s_cards_hidden ? "Cards hidden until the next turn" : "Cards shown");
     } else {
-      menu_close();
-      list_window_push(LW_STEPS, 0);
-      return;
+      toggle_mute();
     }
   } else {
     if (b == BUTTON_ID_UP) {
-      s_moved = true;  // re-center when the bar closes
-      map_adjust(ADJ_FIT_ROUTE, 0, 0);
+      menu_close();
+      list_window_push(LW_STEPS, 0);
+      return;
     } else {
       end_nav();
       return;
@@ -356,8 +392,7 @@ static void press(ButtonId b) {
     case BUTTON_ID_SELECT: menu_open(); break;
     case BUTTON_ID_UP: list_window_push(LW_STEPS, 0); break;
     case BUTTON_ID_DOWN:
-      s_muted = !s_muted;
-      ui_toast(s_window, s_muted ? "Turn alerts off" : "Turn alerts on");
+      toggle_mute();
       layer_mark_dirty(s_canvas);
       break;
     case BUTTON_ID_BACK:
@@ -410,8 +445,9 @@ static void window_load(Window *window) {
   s_dots = dots_layer_create(GRect(0, b.size.h / 2 - 12, b.size.w, 24));
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
-  mapbar_init(&s_bar, s_canvas, b.size, ICON_MYLOC, ICON_CLOSE, bar_cb, NULL);
+  mapbar_init(&s_bar, s_canvas, b.size, ICON_MYLOC, ICON_MAP, bar_cb, NULL);
   s_bar.extra_up_color = C_BLUE;
+  s_bar.extra_down_color = C_BLUE;
   maptouch_init(&s_touch, GRect(0, 0, b.size.w - STRIP_W, b.size.h), map_tap, NULL, &s_bar);
 }
 
@@ -467,5 +503,8 @@ void nav_window_push(int mode) {
   });
   window_stack_push(s_window, true);
   GRect b = layer_get_bounds(window_get_root_layer(s_window));
+  s_heading_up = persist_exists(PERSIST_HEADING_UP) ? persist_read_bool(PERSIST_HEADING_UP) : true;
+  s_map_heading = 0;
   map_request(CMD_NAV_START, b.size.w, b.size.h, -1, mode);
+  if (!s_heading_up) send_view_mode();
 }

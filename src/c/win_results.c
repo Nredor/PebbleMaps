@@ -155,6 +155,10 @@ static void menu_draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *
   ListItem *item = &s_items[i->row];
   GRect b = layer_get_bounds(cell);
   bool hl = menu_cell_layer_is_highlighted(cell);
+  if (!hl) {
+    graphics_context_set_stroke_color(ctx, C_DIVIDER);
+    graphics_draw_line(ctx, GPoint(PBL_IF_ROUND_ELSE(24, 6), b.size.h - 1), GPoint(b.size.w - PBL_IF_ROUND_ELSE(24, 6), b.size.h - 1));
+  }
   graphics_context_set_text_color(ctx, hl ? GColorWhite : C_TEXT);
 #ifdef PBL_ROUND
   graphics_draw_text(ctx, item->title, g_fonts.body_b, GRect(18, 2, b.size.w - 36, g_fonts.body_h + 6),
@@ -178,7 +182,12 @@ static Window *s_list_win;
 
 static void list_load(Window *w) {
   Layer *root = window_get_root_layer(w);
-  s_menu = menu_layer_create(layer_get_bounds(root));
+  GRect lb = layer_get_bounds(root);
+#ifndef PBL_ROUND
+  lb.origin.y += 4;
+  lb.size.h -= 4;
+#endif
+  s_menu = menu_layer_create(lb);
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = menu_rows, .get_cell_height = menu_cell_h,
     .draw_row = menu_draw_row, .select_click = menu_select,

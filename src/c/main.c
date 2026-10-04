@@ -94,8 +94,8 @@ static void init(void) {
   g_app.touch = touch_service_is_enabled();
   if (g_app.touch) app_touch_navigation_enable(true);
   comm_init();
-  home_window_push();
   map_reserve();
+  home_window_push();
 }
 
 static void deinit(void) {

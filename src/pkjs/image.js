@@ -136,19 +136,37 @@ function colorDist(a, b) {
   return dr * dr * 3 + dg * dg * 4 + db * db * 2;
 }
 
-// Convert to a 16-color palettized 4-bit image (Pebble color watches).
-// Returns { width, height, stride, palette:[16 bytes argb], data:Uint8Array }
-function to4Bit(img) {
-  var w = img.width, h = img.height, rgb = img.rgb;
+// "Base" pixels: one byte per pixel that rotating/cropping can sample directly.
+// Color watches: Pebble 64-color index (0bRRGGBB). Black & white: luminance.
+var WHITE = { 1: 0x3F, 0: 255 };
+
+function toBase(img, format) {
+  var n = img.width * img.height, rgb = img.rgb;
+  var px = new Uint8Array(n);
+  for (var i = 0; i < n; i++) {
+    var r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+    px[i] = format === 1 ? pebbleColor(r, g, b) : (r * 299 + g * 587 + b * 114) / 1000;
+  }
+  return { width: img.width, height: img.height, px: px };
+}
+
+// Pack base pixels for the watch (16-color 4-bit, or dithered 1-bit)
+function pack(px, w, h, format) {
+  if (format !== 1) {
+    var stride1 = ((w + 31) >> 5) * 4;
+    var data1 = new Uint8Array(stride1 * h);
+    for (var y1 = 0; y1 < h; y1++) {
+      for (var x1 = 0; x1 < w; x1++) {
+        var t = (BAYER[(y1 & 3) * 4 + (x1 & 3)] + 0.5) * 16;
+        if (px[y1 * w + x1] > t) data1[y1 * stride1 + (x1 >> 3)] |= 1 << (x1 & 7);  // 1 = white, LSB first
+      }
+    }
+    return { width: w, height: h, stride: stride1, palette: [], data: data1, format: 0 };
+  }
   var n = w * h;
-  var idx64 = new Uint8Array(n);
   var counts = new Array(64);
   for (var c = 0; c < 64; c++) counts[c] = 0;
-  for (var i = 0; i < n; i++) {
-    var pc = pebbleColor(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]);
-    idx64[i] = pc;
-    counts[pc]++;
-  }
+  for (var i = 0; i < n; i++) counts[px[i]]++;
   var used = [];
   for (var k = 0; k < 64; k++) if (counts[k]) used.push(k);
   used.sort(function (a, b) { return counts[b] - counts[a]; });
@@ -166,7 +184,7 @@ function to4Bit(img) {
   var data = new Uint8Array(stride * h);
   for (var y = 0; y < h; y++) {
     for (var x = 0; x < w; x++) {
-      var v = map[idx64[y * w + x]];
+      var v = map[px[y * w + x]];
       var o = y * stride + (x >> 1);
       if (x & 1) data[o] |= v;
       else data[o] |= v << 4;   // leftmost pixel in the high nibble
@@ -179,30 +197,17 @@ function to4Bit(img) {
 
 var BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
-// Convert to 1-bit with ordered dithering (Pebble 2 / black & white watches).
-function to1Bit(img) {
-  var w = img.width, h = img.height, rgb = img.rgb;
-  var stride = ((w + 31) >> 5) * 4;
-  var data = new Uint8Array(stride * h);
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      var o = (y * w + x) * 3;
-      var lum = (rgb[o] * 299 + rgb[o + 1] * 587 + rgb[o + 2] * 114) / 1000;
-      var t = (BAYER[(y & 3) * 4 + (x & 3)] + 0.5) * 16;
-      if (lum > t) data[y * stride + (x >> 3)] |= 1 << (x & 7);  // 1 = white, LSB first
-    }
-  }
-  return { width: w, height: h, stride: stride, palette: [], data: data, format: 0 };
-}
-
+// Older helpers (used by tests): RGB image -> watch format
 function convert(img, format) {
-  return format === 1 ? to4Bit(img) : to1Bit(img);
+  var b = toBase(img, format);
+  return pack(b.px, b.width, b.height, format);
 }
 
 module.exports = {
   decodePNG: decodePNG,
   convert: convert,
-  to4Bit: to4Bit,
-  to1Bit: to1Bit,
+  toBase: toBase,
+  pack: pack,
+  WHITE: WHITE,
   pebbleColor: pebbleColor
 };

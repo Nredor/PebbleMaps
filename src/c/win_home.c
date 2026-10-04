@@ -38,6 +38,8 @@ static void send_hello(void) {
   m.num = PBL_IF_COLOR_ELSE(FMT_4BIT, FMT_1BIT);
   m.mode = (g_app.has_mic ? 1 : 0) | (PBL_IF_ROUND_ELSE(1, 0) << 1) | (g_app.touch ? 4 : 0);
   m.idx = g_app.inbox_size;
+  GSize bs = map_buffer_size();
+  snprintf(m.text, sizeof(m.text), "%d,%d", bs.w, bs.h);
   comm_send(&m);
   s_hello_sent = true;
 }
