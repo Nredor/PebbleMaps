@@ -784,12 +784,16 @@ function onSearch(p) {
   if (!query) return sendError({ code: P.ERR.NO_RESULTS, text: 'Say a place, like "coffee" or "public library".' });
   sendBusy('Searching for "' + fmt.clip(query, 30) + '"');
   getLocation(60000, function (err, loc) {
+    var open = p.mode === 1;   // the "Open now" switch
     google.searchText(query, err ? null : loc, function (e2, list) {
       if (e2) return sendError(e2);
       results = list;
-      if (!list.length) return sendError({ code: P.ERR.NO_RESULTS, text: 'No results for "' + fmt.clip(query, 40) + '"' });
+      if (!list.length) {
+        return sendError({ code: P.ERR.NO_RESULTS, text: 'No results' + (open ? ' open right now' : '') + ' for "' + fmt.clip(query, 40) + '"' +
+          (open ? '. Turn off "Open now" in Places to see all.' : '') });
+      }
       sendList(P.LIST.RESULTS, resultItems());
-    });
+    }, open);
   });
 }
 

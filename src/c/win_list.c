@@ -182,14 +182,14 @@ static uint16_t num_rows(MenuLayer *m, uint16_t section, void *ctx) {
 
 static bool mp_on(int row) {
   if (row == 0) return g_app.pois_on;
-  if (row == MP_OPEN) return g_app.open_map;
+  if (row == MP_OPEN) return g_app.open_now;
   if (row < MP_FIRST_CAT) return g_app.poi_names;
   return (g_app.poi_mask >> (row - MP_FIRST_CAT)) & 1;
 }
 
 static void mp_toggle(int row) {
   if (row == 0) g_app.pois_on = !g_app.pois_on;
-  else if (row == MP_OPEN) g_app.open_map = !g_app.open_map;
+  else if (row == MP_OPEN) g_app.open_now = !g_app.open_now;
   else if (row < MP_FIRST_CAT) g_app.poi_names = !g_app.poi_names;
   else g_app.poi_mask ^= 1 << (row - MP_FIRST_CAT);
   poi_prefs_save();
@@ -301,7 +301,7 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
       }
       if (i->row == PL_OPEN) {
         *title = "Open now";
-        *sub = PBL_IF_ROUND_ELSE(g_app.open_list ? "On" : "Off", NULL);
+        *sub = PBL_IF_ROUND_ELSE(g_app.open_now ? "On" : "Off", NULL);
         *icon = ICON_CLOCK;
         *icon_color = C_GREEN;
         break;
@@ -421,7 +421,7 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   int tw = b.size.w - tx - 4;
   if (lw->kind == LW_STEPS && lw->count && lw->items[i->row].extra) tw -= 12;
   if (lw->kind == LW_MAPPLACES || (lw->kind == LW_CATEGORIES && i->row == PL_OPEN)) {
-    bool on = lw->kind == LW_MAPPLACES ? mp_on(i->row) : g_app.open_list;
+    bool on = lw->kind == LW_MAPPLACES ? mp_on(i->row) : g_app.open_now;
     draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), on, hl, dim);
     tw -= 34;
   }
@@ -513,7 +513,7 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
     case LW_CATEGORIES:
       if (i->row == 0) list_window_push(LW_FAVS, 0);
       else if (i->row == PL_OPEN) {
-        g_app.open_list = !g_app.open_list;
+        g_app.open_now = !g_app.open_now;
         poi_prefs_save();
         list_reload(lw);
       } else results_window_push_nearby(i->row - PL_FIRST_CAT);

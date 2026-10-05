@@ -29,9 +29,10 @@ static void request_results(void) {
   if (s_category >= 0) {
     comm_msg_init(&m, CMD_NEARBY);
     m.idx = s_category;
-    m.mode = g_app.open_list ? 1 : 0;   // open now only
+    m.mode = g_app.open_now ? 1 : 0;   // open now only
   } else {
     comm_msg_init(&m, CMD_SEARCH);
+    m.mode = g_app.open_now ? 1 : 0;
     strncpy(m.text, s_query, sizeof(m.text) - 1);
   }
   comm_send(&m);

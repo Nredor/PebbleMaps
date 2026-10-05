@@ -318,11 +318,25 @@ static void pan_cb(const Recognizer *r, RecognizerEvent ev) {
   }
 }
 
-static void tap_cb(const Recognizer *r, RecognizerEvent ev) {
-  if (ev != RecognizerEvent_Completed) return;
-  GPoint p = tap_recognizer_get_tap_point(r);
-  GPoint c = GPoint(p.x, p.y - scroll_layer_get_content_offset(s_scroll).y);
-  if (grect_contains_point(&s_dir_btn, &c)) go_directions();
+// Taps come straight from the touch screen (finger down and up without moving)
+static GPoint s_down;
+static bool s_down_on, s_moved;
+
+static void touch_cb(const TouchEvent *e, void *ctx) {
+  if (e->type == TouchEvent_Touchdown) {
+    s_down = GPoint(e->x, e->y);
+    s_down_on = true;
+    s_moved = false;
+    return;
+  }
+  if (!s_down_on) return;
+  if (abs(e->x - s_down.x) > 8 || abs(e->y - s_down.y) > 8) s_moved = true;
+  if (e->type != TouchEvent_Liftoff) return;
+  s_down_on = false;
+  if (s_moved) return;
+  GPoint c = GPoint(s_down.x, s_down.y - scroll_layer_get_content_offset(s_scroll).y);
+  GRect hit = grect_inset(s_dir_btn, GEdgeInsets(-6));   // a little forgiving
+  if (grect_contains_point(&hit, &c)) go_directions();
   else if (c.y < s_photo_h) next_photo();
 }
 #endif
@@ -348,7 +362,6 @@ static void window_load(Window *window) {
   if (g_app.touch) {
   window_set_touch_bridge_disabled(window, true);
   window_attach_recognizer(window, pan_recognizer_create(pan_cb, NULL, PanAxis_Vertical));
-  window_attach_recognizer(window, tap_recognizer_create(tap_cb, NULL));
   }
 #endif
   OutMsg m;
@@ -361,6 +374,9 @@ static void window_load(Window *window) {
 static void window_appear(Window *window) {
   comm_set_handler(handle, NULL);
   map_set_observer(s_content);
+#if INFO_TOUCH
+  if (g_app.touch) touch_service_subscribe(touch_cb, NULL);
+#endif
   if (s_loaded && s_photos && g_map.seq != s_photo_seq) request_photo();
 }
 
@@ -369,6 +385,9 @@ static void window_disappear(Window *window) {
   map_set_observer(NULL);
   ui_toast_cancel();
   map_release();      // the photo isn't a map: screens underneath ask for theirs again
+#if INFO_TOUCH
+  if (g_app.touch_hw) touch_service_unsubscribe();
+#endif
 }
 
 static void window_unload(Window *window) {

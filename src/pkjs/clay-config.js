@@ -146,7 +146,8 @@ function config() {
             'The middle button opens Places (buttons layout) or the map controls (touch layout). ' +
             'The bottom button opens Places on map: turn places and their names on or off, and pick which kinds ' +
             '(restaurants, coffee, ATMs...). Tap a place or its name for photos, hours and reviews. ' +
-            '"Open now" (on at first) hides closed places there and in the Places lists.<br><br>' +
+            '"Open now" (on at first, shared with the Places menu) hides closed places on the map, ' +
+            'in Places lists and in searches.<br><br>' +
             '<strong>Heading up:</strong> standing still for 30 seconds turns the map back to north up. ' +
             'If you move the map yourself, it stays there while you stand still and follows you again ' +
             'a few seconds after you start moving.<br><br>' +

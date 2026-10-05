@@ -187,8 +187,9 @@ function placeFrom(p) {
   };
 }
 
-function searchText(query, loc, cb) {
+function searchText(query, loc, cb, openNow) {
   var body = { textQuery: query, pageSize: 10, languageCode: config.language };
+  if (openNow) body.openNow = true;   // only places open right now
   if (loc) {
     body.locationBias = { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: 40000 } };
   }
