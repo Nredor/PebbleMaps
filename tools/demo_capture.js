@@ -125,9 +125,12 @@ function pmDemoCapture(key, home, log, done) {
     // which map pictures: every zoom covers what that kind of screen shows
     var near = [home, [dest.lat, dest.lng]].concat(routePts);
     var sb = (starbucks.places || []).map(function (p) { return [p.location.latitude, p.location.longitude]; });
+    // far-away Starbucks only need the zoomed-out pictures
+    var sbNear = sb.filter(function (p) { return Math.abs(p[0] - home[0]) < 0.03 && Math.abs(p[1] - home[1]) < 0.04; });
     var plan = [
-      { z: 13, pts: points.concat(sb), margin: 420 },
-      { z: 14, pts: points.concat(sb), margin: 420 },
+      { z: 12, pts: points.concat(sb), margin: 420 },
+      { z: 13, pts: points.concat(sbNear), margin: 420 },
+      { z: 14, pts: points.concat(sbNear), margin: 420 },
       { z: 15, pts: points.concat(near), margin: 420 },
       { z: 16, pts: near, margin: 420 }
     ];
@@ -145,7 +148,7 @@ function pmDemoCapture(key, home, log, done) {
         }
       }
     });
-    if (jobs.length > 400) throw new Error('Too many map pictures (' + jobs.length + '). Pick a spot with places closer together.');
+    if (jobs.length > 700) throw new Error('Too many map pictures (' + jobs.length + '). Pick a spot with places closer together.');
     addJSON('meta.json', { home: home, snap: SNAP, size: SIZE, style: 'light', dest: dest,
                            tiles: jobs.map(function (j) { return j.z + '_' + j.gx + '_' + j.gy; }) });
     var doneCount = 0;
