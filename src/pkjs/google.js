@@ -267,6 +267,94 @@ function placeDetails(placeId, token, cb) {
   });
 }
 
+// --- Places shown on the map, and the "more info" page ---------------------------
+// The kinds of places Google Maps shows on its map
+var POI_TYPES = ['restaurant', 'cafe', 'coffee_shop', 'bar', 'bakery', 'fast_food_restaurant', 'ice_cream_shop',
+  'tourist_attraction', 'museum', 'art_gallery', 'park', 'shopping_mall', 'clothing_store', 'book_store',
+  'supermarket', 'grocery_store', 'pharmacy', 'movie_theater', 'library', 'hotel', 'performing_arts_theater'];
+
+// Popular places around a spot (for the map). cb(err, [place + primaryType])
+function searchPois(loc, radius, cb) {
+  var body = {
+    includedTypes: POI_TYPES,
+    maxResultCount: 20,
+    rankPreference: 'POPULARITY',
+    languageCode: config.language,
+    locationRestriction: { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: radius } }
+  };
+  postJSON('places', '/v1/places:searchNearby', PLACE_FIELDS + ',places.primaryType', body, 'Places API', function (err, j) {
+    if (err) return cb(err);
+    cb(null, (j.places || []).map(function (p) {
+      var o = placeFrom(p);
+      o.primaryType = p.primaryType || '';
+      return o;
+    }).filter(function (p) { return p.lat !== undefined; }));
+  });
+}
+
+var PRICE = { PRICE_LEVEL_FREE: 'Free', PRICE_LEVEL_INEXPENSIVE: '$', PRICE_LEVEL_MODERATE: '$$',
+  PRICE_LEVEL_EXPENSIVE: '$$$', PRICE_LEVEL_VERY_EXPENSIVE: '$$$$' };
+var INFO_FIELDS = 'id,displayName,formattedAddress,shortFormattedAddress,location,primaryType,primaryTypeDisplayName,' +
+  'rating,userRatingCount,priceLevel,currentOpeningHours,regularOpeningHours,nationalPhoneNumber,websiteUri,' +
+  'editorialSummary,reviews,photos,businessStatus';
+
+function txt(o) { return (o && (o.text || '')) || ''; }
+
+// Everything Google knows about a place: ratings, hours, reviews, photos
+function placeInfo(placeId, cb) {
+  request({
+    url: url('places', '/v1/places/' + encodeURIComponent(placeId) + '?languageCode=' + config.language),
+    headers: { 'X-Goog-Api-Key': config.key, 'X-Goog-FieldMask': INFO_FIELDS }
+  }, function (err, text) {
+    if (err) return cb(friendlyError(err.status, err.body, 'Places API'));
+    var j;
+    try { j = JSON.parse(text); } catch (e) { return cb(friendlyError(500, 'Bad response', 'Places API')); }
+    var info = placeFrom(j);
+    var cur = j.currentOpeningHours || {};
+    var reg = j.regularOpeningHours || {};
+    info.primaryType = j.primaryType || '';
+    info.rating = j.rating || 0;
+    info.ratingCount = j.userRatingCount || 0;
+    info.price = PRICE[j.priceLevel] || '';
+    info.openNow = cur.openNow === undefined ? (reg.openNow === undefined ? null : reg.openNow) : cur.openNow;
+    info.nextOpen = cur.nextOpenTime || reg.nextOpenTime || '';
+    info.nextClose = cur.nextCloseTime || reg.nextCloseTime || '';
+    info.hours = cur.weekdayDescriptions || reg.weekdayDescriptions || [];
+    info.always = !!((cur.periods || reg.periods || []).length === 1 && !(cur.periods || reg.periods)[0].close);
+    info.phone = j.nationalPhoneNumber || '';
+    info.website = j.websiteUri || '';
+    info.summary = txt(j.editorialSummary);
+    info.status = j.businessStatus || '';
+    info.reviews = (j.reviews || []).map(function (r) {
+      return {
+        author: (r.authorAttribution && r.authorAttribution.displayName) || 'Someone',
+        rating: r.rating || 0,
+        when: r.relativePublishTimeDescription || '',
+        text: txt(r.text) || txt(r.originalText)
+      };
+    });
+    info.photos = (j.photos || []).slice(0, 10).map(function (ph) {
+      return { name: ph.name, w: ph.widthPx || 0, h: ph.heightPx || 0 };
+    });
+    cb(null, info);
+  });
+}
+
+// A place photo (JPEG bytes), sized to fit within maxW x maxH
+function placePhoto(name, maxW, maxH, cb) {
+  var path = '/v1/' + name + '/media?skipHttpRedirect=true&maxWidthPx=' + Math.round(maxW) + '&maxHeightPx=' + Math.round(maxH);
+  request({ url: url('places', path), headers: { 'X-Goog-Api-Key': config.key } }, function (err, text) {
+    if (err) return cb(friendlyError(err.status, err.body, 'Places API'));
+    var j;
+    try { j = JSON.parse(text); } catch (e) { return cb(friendlyError(500, 'Bad response', 'Places API')); }
+    if (!j.photoUri) return cb({ code: P.ERR.API, title: 'No photo', text: 'Google sent no photo.' });
+    getBinary(j.photoUri, function (e2, bytes) {
+      if (e2) return cb(friendlyError(e2.status, e2.body, 'Places API'));
+      cb(null, bytes);
+    });
+  });
+}
+
 // --- Cloud Text-to-Speech (spoken directions) ----------------------------------
 // cb(err, base64 WAV at 8 kHz)
 function tts(text, cb) {
@@ -470,6 +558,9 @@ module.exports = {
   tts: tts,
   autocomplete: autocomplete,
   placeDetails: placeDetails,
+  searchPois: searchPois,
+  placeInfo: placeInfo,
+  placePhoto: placePhoto,
   setKey: setKey,
   hasKey: hasKey,
   isTest: isTest,

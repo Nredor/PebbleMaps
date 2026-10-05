@@ -55,7 +55,7 @@ void mapbar_deinit(MapBar *mb) {
 }
 
 static int pages(MapBar *mb) {
-  return (mb->extra_up || mb->extra_down) ? 4 : 3;
+  return 3 + ((mb->extra_up || mb->extra_down) ? 1 : 0) + ((mb->extra2_up || mb->extra2_down) ? 1 : 0);
 }
 
 static void moved(MapBar *mb) {
@@ -78,7 +78,8 @@ bool mapbar_button(MapBar *mb, ButtonId b) {
         case MB_PAGE_ZOOM: map_adjust(ADJ_ZOOM_IN, 0, 0); moved(mb); break;
         case MB_PAGE_DOLLY: map_adjust(ADJ_PAN, 0, -sy); moved(mb); break;
         case MB_PAGE_PAN: map_adjust(ADJ_PAN, -sx, 0); moved(mb); break;
-        default: if (mb->extra_up && mb->cb) mb->cb(MB_EV_EXTRA_UP, mb->ctx); break;
+        case MB_PAGE_EXTRA: if (mb->extra_up && mb->cb) mb->cb(MB_EV_EXTRA_UP, mb->ctx); break;
+        default: if (mb->extra2_up && mb->cb) mb->cb(MB_EV_EXTRA2_UP, mb->ctx); break;
       }
       break;
     case BUTTON_ID_DOWN:
@@ -86,7 +87,8 @@ bool mapbar_button(MapBar *mb, ButtonId b) {
         case MB_PAGE_ZOOM: map_adjust(ADJ_ZOOM_OUT, 0, 0); moved(mb); break;
         case MB_PAGE_DOLLY: map_adjust(ADJ_PAN, 0, sy); moved(mb); break;
         case MB_PAGE_PAN: map_adjust(ADJ_PAN, sx, 0); moved(mb); break;
-        default: if (mb->extra_down && mb->cb) mb->cb(MB_EV_EXTRA_DOWN, mb->ctx); break;
+        case MB_PAGE_EXTRA: if (mb->extra_down && mb->cb) mb->cb(MB_EV_EXTRA_DOWN, mb->ctx); break;
+        default: if (mb->extra2_down && mb->cb) mb->cb(MB_EV_EXTRA2_DOWN, mb->ctx); break;
       }
       break;
     default:
@@ -103,11 +105,17 @@ void mapbar_draw(MapBar *mb, GContext *ctx, GRect bounds) {
     case MB_PAGE_ZOOM: ic.up = ICON_ZOOM_IN; ic.down = ICON_ZOOM_OUT; break;
     case MB_PAGE_DOLLY: ic.up = ICON_UP; ic.down = ICON_DOWN; break;
     case MB_PAGE_PAN: ic.up = ICON_LEFT; ic.down = ICON_RIGHT; break;
-    default:
+    case MB_PAGE_EXTRA:
       ic.up = mb->extra_up;
       ic.down = mb->extra_down;
       ic.up_color = mb->extra_up_color;
       ic.down_color = mb->extra_down_color;
+      break;
+    default:
+      ic.up = mb->extra2_up;
+      ic.down = mb->extra2_down;
+      ic.up_color = mb->extra2_up_color;
+      ic.down_color = mb->extra2_down_color;
       break;
   }
   draw_action_strip(ctx, bounds, &ic);

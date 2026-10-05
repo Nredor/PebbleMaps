@@ -163,22 +163,8 @@ static void draw_map(GContext *ctx, GRect b, GRect visible) {
   if (s_have_puck) draw_puck(ctx, GPoint(origin.x + s_puck.x, origin.y + s_puck.y), g_fonts.level >= 1 ? 9 : 7, s_heading);
   // small compass: the red tip points north
   if (s_have_puck) {
-    GPoint cc = GPoint(visible.origin.x + PBL_IF_ROUND_ELSE(visible.size.w / 2 - 50, 14), visible.origin.y + 14);
-    s_compass = cc;
-    graphics_context_set_fill_color(ctx, GColorWhite);
-    graphics_fill_circle(ctx, cc, 11);
-    graphics_context_set_stroke_color(ctx, C_DIVIDER);
-    graphics_draw_circle(ctx, cc, 11);
-    int32_t a = DEG_TO_TRIGANGLE(-s_map_heading);
-    int sx = sin_lookup(a) * 8 / TRIG_MAX_RATIO, sy = -cos_lookup(a) * 8 / TRIG_MAX_RATIO;
-    int px = cos_lookup(a) * 3 / TRIG_MAX_RATIO, py = sin_lookup(a) * 3 / TRIG_MAX_RATIO;
-    GPoint n[3] = { GPoint(cc.x + sx, cc.y + sy), GPoint(cc.x + px, cc.y + py), GPoint(cc.x - px, cc.y - py) };
-    GPoint so[3] = { GPoint(cc.x - sx, cc.y - sy), GPoint(cc.x + px, cc.y + py), GPoint(cc.x - px, cc.y - py) };
-    GPath pn = { .num_points = 3, .points = n }, ps = { .num_points = 3, .points = so };
-    graphics_context_set_fill_color(ctx, C_RED);
-    gpath_draw_filled(ctx, &pn);
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
-    gpath_draw_filled(ctx, &ps);
+    s_compass = GPoint(visible.origin.x + PBL_IF_ROUND_ELSE(visible.size.w / 2 - 50, 14), visible.origin.y + 14);
+    draw_compass(ctx, s_compass, s_map_heading);
   }
 }
 
@@ -388,6 +374,7 @@ static void bar_cb(MapBarEvent ev, void *ctx) {
       map_adjust(ADJ_FIT_ROUTE, 0, 0);
       break;
     case MB_EV_CLOSED: menu_close(); break;
+    default: break;
   }
   if (s_canvas) layer_mark_dirty(s_canvas);
 }

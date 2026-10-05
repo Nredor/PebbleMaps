@@ -213,6 +213,118 @@ function pack(px, w, h, format, style) {
 
 var BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
+// --- Photos (place pictures) ------------------------------------------------------
+// Scale and crop an RGB picture to fill w x h (box filter), keeping the middle
+function cover(src, sw, sh, w, h) {
+  var scale = Math.max(w / sw, h / sh);
+  var cw = w / scale, ch = h / scale;          // source area that is shown
+  var x0 = (sw - cw) / 2, y0 = (sh - ch) / 2;
+  var out = new Float32Array(w * h * 3);
+  for (var y = 0; y < h; y++) {
+    var sy0 = y0 + y * ch / h, sy1 = y0 + (y + 1) * ch / h;
+    var ya = Math.floor(sy0), yb = Math.max(ya + 1, Math.ceil(sy1));
+    for (var x = 0; x < w; x++) {
+      var sx0 = x0 + x * cw / w, sx1 = x0 + (x + 1) * cw / w;
+      var xa = Math.floor(sx0), xb = Math.max(xa + 1, Math.ceil(sx1));
+      var r = 0, g = 0, b = 0, n = 0;
+      for (var yy = ya; yy < yb && yy < sh; yy++) {
+        for (var xx = xa; xx < xb && xx < sw; xx++) {
+          var o = (yy * sw + xx) * 3;
+          r += src[o]; g += src[o + 1]; b += src[o + 2]; n++;
+        }
+      }
+      var k = (y * w + x) * 3;
+      n = n || 1;
+      out[k] = r / n; out[k + 1] = g / n; out[k + 2] = b / n;
+    }
+  }
+  return out;
+}
+
+// 16 Pebble colors that suit this picture: the most used colors, spread apart
+function photoPalette(px, n) {
+  var hist = new Float64Array(64);
+  for (var i = 0; i < n; i++) {
+    hist[pebbleColor(px[i * 3], px[i * 3 + 1], px[i * 3 + 2])]++;
+  }
+  var chosen = [];
+  var best = 0;
+  for (var c = 1; c < 64; c++) if (hist[c] > hist[best]) best = c;
+  chosen.push(best);
+  while (chosen.length < 16) {
+    var pick = -1, score = -1;
+    for (var m = 0; m < 64; m++) {
+      if (chosen.indexOf(m) >= 0) continue;
+      var dmin = 1e9;
+      for (var j = 0; j < chosen.length; j++) dmin = Math.min(dmin, colorDist(m, chosen[j]));
+      var sc = (hist[m] + 0.01) * dmin;
+      if (sc > score) { score = sc; pick = m; }
+    }
+    chosen.push(pick);
+  }
+  // darkest first: the last slot (what the watch fills empty space with) is the lightest
+  var lum = function (c) { return ((c >> 4) & 3) * 3 + ((c >> 2) & 3) * 6 + (c & 3); };
+  return chosen.sort(function (a, b) { return lum(a) - lum(b); });
+}
+
+// RGB picture -> watch image (16 picked colors, or 1-bit), error-diffusion dithered
+function photo(src, sw, sh, w, h, format) {
+  var px = cover(src, sw, sh, w, h);
+  var x, y, i, e;
+  if (format !== 1) {
+    var lum = new Float32Array(w * h);
+    for (i = 0; i < w * h; i++) lum[i] = (px[i * 3] * 299 + px[i * 3 + 1] * 587 + px[i * 3 + 2] * 114) / 1000;
+    var stride1 = ((w + 31) >> 5) * 4;
+    var data1 = new Uint8Array(stride1 * h);
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        i = y * w + x;
+        var v = lum[i], on = v >= 128;
+        if (on) data1[y * stride1 + (x >> 3)] |= 1 << (x & 7);
+        // Atkinson dithering: crisp on small black & white screens
+        e = (v - (on ? 255 : 0)) / 8;
+        if (x + 1 < w) lum[i + 1] += e;
+        if (x + 2 < w) lum[i + 2] += e;
+        if (y + 1 < h) {
+          if (x > 0) lum[i + w - 1] += e;
+          lum[i + w] += e;
+          if (x + 1 < w) lum[i + w + 1] += e;
+        }
+        if (y + 2 < h) lum[i + 2 * w] += e;
+      }
+    }
+    return { width: w, height: h, stride: stride1, palette: [], data: data1, format: 0 };
+  }
+  var pal = photoPalette(px, w * h);
+  var prgb = pal.map(function (c) { return [((c >> 4) & 3) * 85, ((c >> 2) & 3) * 85, (c & 3) * 85]; });
+  var stride = (w + 1) >> 1;
+  var data = new Uint8Array(stride * h);
+  for (y = 0; y < h; y++) {
+    for (x = 0; x < w; x++) {
+      i = (y * w + x) * 3;
+      var r = px[i], g = px[i + 1], b = px[i + 2];
+      var bi = 0, bd = 1e12;
+      for (var k = 0; k < 16; k++) {
+        var dr = r - prgb[k][0], dg = g - prgb[k][1], db = b - prgb[k][2];
+        var d = dr * dr * 3 + dg * dg * 4 + db * db * 2;
+        if (d < bd) { bd = d; bi = k; }
+      }
+      var o = y * stride + (x >> 1);
+      if (x & 1) data[o] |= bi; else data[o] |= bi << 4;
+      // Floyd-Steinberg, softened a little so photos don't look grainy
+      var er = (r - prgb[bi][0]) * 0.85, eg = (g - prgb[bi][1]) * 0.85, eb = (b - prgb[bi][2]) * 0.85;
+      var spread = [[1, 0, 7], [-1, 1, 3], [0, 1, 5], [1, 1, 1]];
+      for (var s2 = 0; s2 < 4; s2++) {
+        var nx = x + spread[s2][0], ny = y + spread[s2][1];
+        if (nx < 0 || nx >= w || ny >= h) continue;
+        var f = spread[s2][2] / 16, q = (ny * w + nx) * 3;
+        px[q] += er * f; px[q + 1] += eg * f; px[q + 2] += eb * f;
+      }
+    }
+  }
+  return { width: w, height: h, stride: stride, palette: pal.map(function (c) { return 0xC0 | c; }), data: data, format: 1 };
+}
+
 // Older helpers (used by tests): RGB image -> watch format
 function convert(img, format) {
   var b = toBase(img, format);
@@ -227,5 +339,6 @@ module.exports = {
   WHITE: WHITE,
   background: background,
   PALETTES: PALETTES,
-  pebbleColor: pebbleColor
+  pebbleColor: pebbleColor,
+  photo: photo
 };

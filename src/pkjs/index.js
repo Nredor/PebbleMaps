@@ -17,6 +17,7 @@ var clayComponents = require('./clay-components');
 var dev = require('./dev');
 var tiles = require('./tiles');
 var voice = require('./voice');
+var jpeg = require('jpeg-js/lib/decoder');
 
 var CMD = P.CMD;
 
@@ -41,6 +42,18 @@ var watchId = null;
 var simTimer = null;
 var gpsTimer = null;
 var currentMapSeq = 0;
+var mapVisible = false;   // a map screen (not navigation) is showing on the watch
+var homeDrive = false;    // home map: "driving mode" (turns with you, you near the bottom)
+var DRIVE_AHEAD = 0.22;   // driving mode: how far below the middle your arrow sits (share of height)
+// Live location while a map is showing (off = battery saver: the spot when the map opened)
+var live = { on: false, watchId: null, simTimer: null, stopTimer: null, prev: null, heading: 0, moving: false, lastMove: 0, lastRender: 0 };
+var pois = [];            // places drawn on the home map
+var poiCache = {};        // grid cell -> places
+var poiState = { busy: false, last: 0, failUntil: 0 };
+var info = null;          // place on the info page
+var infoCache = [];
+var photoCache = [];
+var lastMk = '';
 
 var S = settings.get();
 
@@ -141,19 +154,63 @@ function outSize(fw, fh) {
 
 function encodeMarkers(list) {
   var data = [];
-  list.slice(0, 12).forEach(function (m) {
+  list.slice(0, 24).forEach(function (m) {
     var x = m.x & 0xffff, y = m.y & 0xffff;
     data.push(x & 0xff, (x >> 8) & 0xff, y & 0xff, (y >> 8) & 0xff, m.kind, m.index || 0);
   });
   return data;
 }
 
+// Where point p is on a view's picture (the picture may be turned)
+function screenPos(p, view) {
+  var a = geo.project(p[0], p[1], view.zoom), c = geo.project(view.center[0], view.center[1], view.zoom);
+  var d = [a[0] - c[0], a[1] - c[1]];
+  if (view.heading) d = toScreenOffset(d[0], d[1], view.heading);
+  return [Math.round(d[0] + view.w / 2), Math.round(d[1] + view.h / 2)];
+}
+
 function markerFor(p, view, kind, index) {
-  var s = geo.toScreen(p, view.center, view.zoom, view.w, view.h);
+  var s = screenPos(p, view);
   var os = outSize(view.w, view.h);
   var mx = (os[0] - view.w) / 2 + 30, my = (os[1] - view.h) / 2 + 30;
   if (s[0] < -mx || s[1] < -my || s[0] > view.w + mx || s[1] > view.h + my) return null;
   return { x: s[0], y: s[1], kind: kind, index: index || 0 };
+}
+
+// You: a blue dot, or an arrow while you're moving (live location)
+function meMarker(v) {
+  if (!me) return null;
+  if (live.on && live.moving) {
+    var rel = (((live.heading - (v.heading || 0)) % 360) + 360) % 360;
+    return markerFor(me, v, P.MK.ARROW, Math.round(rel / 2) % 180);
+  }
+  return markerFor(me, v, P.MK.ME);
+}
+
+function poiMarkers(v) {
+  if (!S.showPois || v.zoom < 15) return [];
+  var out = [];
+  for (var i = 0; i < pois.length && out.length < 22; i++) {
+    var m = markerFor([pois[i].lat, pois[i].lng], v, P.MK.POI + pois[i].cat, i);
+    if (m && m.x >= -8 && m.y >= -8 && m.x <= v.w + 8 && m.y <= v.h + 8) out.push(m);
+  }
+  return out;
+}
+
+function homeMarkers(v) {
+  return [meMarker(v)].concat(poiMarkers(v));
+}
+
+// Send just the markers for what the watch shows (your dot moving, places arriving)
+function sendMarkers(st, force) {
+  var mk = encodeMarkers(st.markers(st.view).filter(Boolean));
+  var key = mk.join(',');
+  if (!force && key === lastMk) return;
+  lastMk = key;
+  msg.drop('mk');
+  var d = { cmd: CMD.MARKERS, seq: st.seq };
+  if (mk.length) d.data = mk;
+  send(d, 'mk');
 }
 
 // --- What the watch's picture buffer holds ------------------------------------
@@ -314,6 +371,7 @@ function pushImage(seq, img, plan, info, markers, opts) {
   });
   if (markers) {
     var mk = encodeMarkers(markers.filter(Boolean));
+    lastMk = mk.join(',');
     if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
     else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
   }
@@ -330,9 +388,11 @@ function streamMap(seq, view, markers, done, quiet) {
   currentMapSeq = seq;
   var token = ++renderToken;
   var os = outSize(view.w, view.h);
+  var hd = view.heading || 0;
   var c0 = geo.project(view.center[0], view.center[1], view.zoom);
-  var plan = planImage(c0, view.zoom, 0, os[0], os[1]);
-  var o = { c: plan.c, center: view.center, zoom: view.zoom, w: os[0], h: os[1], heading: 0,
+  var plan = planImage(c0, view.zoom, hd, os[0], os[1]);
+  live.lastRender = Date.now();
+  var o = { c: plan.c, center: view.center, zoom: view.zoom, w: os[0], h: os[1], heading: hd,
             style: mapStyle(), format: watch.fmt, path: view.path, markers: view.gmarkers };
   refreshFn = function () { if (currentMapSeq === seq && !navState) streamMap(seq, view, markers, null, true); };
   tiles.get(o, function (err, img) {
@@ -349,7 +409,7 @@ function streamMap(seq, view, markers, done, quiet) {
       return;
     }
     mapWorked();
-    pushImage(seq, img, plan, { zoom: view.zoom, heading: 0, key: tiles.styleKey(o) }, markers, {
+    pushImage(seq, img, plan, { zoom: view.zoom, heading: hd, key: tiles.styleKey(o) }, markers, {
       ack: true,
       onBegin: function () { if (done) done(null); }
     });
@@ -362,7 +422,28 @@ var views = {};      // kind -> { view, base, markers: fn(view) }
 var lastKind = null;
 
 function cloneView(v) {
-  return { center: v.center.slice(), zoom: v.zoom, w: v.w, h: v.h, path: v.path, gmarkers: v.gmarkers };
+  return { center: v.center.slice(), zoom: v.zoom, w: v.w, h: v.h, path: v.path, gmarkers: v.gmarkers, heading: v.heading || 0 };
+}
+
+// Home map following you: centered on you (north up), or in driving mode turned
+// to your direction of travel with you near the bottom
+function followView(v) {
+  var nv = cloneView(v);
+  if (!me) {
+    if (!homeDrive) nv.heading = 0;
+    return nv;
+  }
+  if (homeDrive) {
+    var q = function (h) { return (Math.round(h / 5) * 5) % 360; };
+    var hd = live.on && live.moving ? q(live.heading) : (v.heading || 0);
+    nv.heading = hd;
+    var pos = geo.project(me[0], me[1], nv.zoom), a = geo.rad(hd), ahead = DRIVE_AHEAD * nv.h;
+    nv.center = geo.unproject(pos[0] + Math.sin(a) * ahead, pos[1] - Math.cos(a) * ahead, nv.zoom);
+  } else {
+    nv.heading = 0;
+    nv.center = me.slice();
+  }
+  return nv;
 }
 
 function showView(seq, kind, base, markersFn, restore) {
@@ -373,6 +454,7 @@ function showView(seq, kind, base, markersFn, restore) {
   } else {
     st = views[kind] = { view: cloneView(base), base: base, markers: markersFn };
   }
+  st.seq = seq;
   lastKind = kind;
   streamMap(seq, st.view, markersFn(st.view));
 }
@@ -384,21 +466,28 @@ function onAdjust(p) {
   if (!st) return;
   var v = cloneView(st.view);
   var dx = p.width || 0, dy = p.height || 0;
+  var home = lastKind === 'home';
+  st.seq = p.seq;
+  setMapVisible(true);
   switch (p.idx) {
     case P.ADJ.ZOOM_IN: v.zoom = Math.min(20, v.zoom + 1); break;
     case P.ADJ.ZOOM_OUT: v.zoom = Math.max(2, v.zoom - 1); break;
     case P.ADJ.PAN: {
       var q = geo.project(v.center[0], v.center[1], v.zoom);
-      v.center = geo.unproject(q[0] + dx, q[1] + dy, v.zoom);
+      var wd = toWorld(dx, dy, v.heading || 0);
+      v.center = geo.unproject(q[0] + wd[0], q[1] + wd[1], v.zoom);
+      if (home) st.follow = false;
       break;
     }
     default:
       v = cloneView(st.base);
-      if (lastKind === 'home' && me) v.center = me.slice();
+      if (home) st.follow = true;
       break;
   }
+  if (home && st.follow) v = followView(v);
   st.view = v;
   streamMap(p.seq, v, st.markers(v));
+  if (home) maybeFetchPois(v);
 }
 
 function clampSize(w, h) {
@@ -418,11 +507,196 @@ function onHomeMap(p) {
   if (needKey()) return;
   var size = clampSize(p.width, p.height);
   var zoom = p.idx > 0 ? p.idx : 15;
+  var restore = ((p.mode || 0) & 1) === 1;
+  homeDrive = ((p.mode || 0) & 2) === 2;
+  setMapVisible(true);
   getLocation(20000, function (err, loc) {
     if (err) return sendError(err);
-    showView(p.seq, 'home', { center: loc.slice(), zoom: zoom, w: size[0], h: size[1] }, function (v) {
-      return [me ? markerFor(me, v, P.MK.ME) : null];
-    }, p.mode === 1);
+    var base = { center: loc.slice(), zoom: zoom, w: size[0], h: size[1], heading: 0 };
+    var st = views.home;
+    if (!(restore && st && st.view.w === base.w && st.view.h === base.h)) {
+      st = views.home = { view: cloneView(base), base: base, follow: true };
+    }
+    st.base = base;
+    st.markers = homeMarkers;
+    st.seq = p.seq;
+    lastKind = 'home';
+    if (st.follow) st.view = followView(st.view);
+    else if (!homeDrive) st.view.heading = 0;
+    streamMap(p.seq, st.view, st.markers(st.view));
+    maybeFetchPois(st.view);
+  });
+}
+
+// --- Live location ------------------------------------------------------------
+function setMapVisible(on) {
+  mapVisible = on;
+  updateTracking();
+}
+
+function updateTracking() {
+  var want = S.liveLocation && mapVisible && !navState && google.hasKey();
+  if (want) {
+    clearTimeout(live.stopTimer);
+    live.stopTimer = null;
+    if (!live.on) startLive();
+  } else if (live.on && !live.stopTimer) {
+    // a short grace period: moving between map screens shouldn't restart the GPS
+    live.stopTimer = setTimeout(function () {
+      live.stopTimer = null;
+      if (!(S.liveLocation && mapVisible && !navState)) stopLive();
+    }, navState ? 0 : 4000);
+  }
+}
+
+function startLive() {
+  live.on = true;
+  live.prev = null;
+  live.moving = false;
+  if (dev.simLocation) {
+    if (dev.simWalk) startSimWalk();
+    return;
+  }
+  live.watchId = navigator.geolocation.watchPosition(function (pos) {
+    var c = pos.coords;
+    onLiveFix([c.latitude, c.longitude], c.accuracy || 50, c.heading, c.speed, Date.now());
+  }, function (e) {
+    console.log('live location: ' + (e && e.message));
+  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+}
+
+function stopLive() {
+  if (live.watchId !== null) navigator.geolocation.clearWatch(live.watchId);
+  live.watchId = null;
+  if (live.simTimer) clearInterval(live.simTimer);
+  live.simTimer = null;
+  live.on = false;
+  live.moving = false;
+}
+
+// Test mode only: walk/drive in a straight line, then stop
+function startSimWalk() {
+  var w = dev.simWalk, t0 = Date.now(), step = (dev.simInterval || 1000) / 1000;
+  var pos = (me || dev.simLocation).slice();
+  live.simTimer = setInterval(function () {
+    var moving = !w.stopAfter || (Date.now() - t0) / 1000 < w.stopAfter;
+    if (moving) {
+      var d = w.speed * step, a = geo.rad(w.bearing);
+      pos = [pos[0] + d * Math.cos(a) / 111320, pos[1] + d * Math.sin(a) / (111320 * Math.cos(geo.rad(pos[0])))];
+    }
+    onLiveFix(pos.slice(), 5, moving ? w.bearing : NaN, moving ? w.speed : 0, Date.now());
+  }, dev.simInterval || 1000);
+}
+
+function onLiveFix(p, acc, cHeading, cSpeed, t) {
+  if (navState) return;
+  me = p;
+  meAcc = acc;
+  meTime = t;
+  var prev = live.prev;
+  var moved = prev ? geo.haversine(prev.p, p) : 0;
+  var dt = prev ? (t - prev.t) / 1000 : 0;
+  var far = moved >= Math.max(8, Math.min(acc, 40) * 0.8);   // more than GPS wobble
+  var speed = (typeof cSpeed === 'number' && !isNaN(cSpeed) && cSpeed >= 0) ? cSpeed : null;
+  if (speed === null && far && dt > 0.5) speed = moved / dt;
+  if (typeof cHeading === 'number' && !isNaN(cHeading) && cHeading >= 0 && (speed || 0) > 0.6) live.heading = cHeading;
+  else if (far) live.heading = geo.bearing(prev.p, p);
+  if (!prev || far || dt > 20) live.prev = { p: p, t: t };
+  if ((speed || 0) >= 0.8 && acc <= 60) {
+    live.moving = true;
+    live.lastMove = t;
+  } else if (live.moving && t - live.lastMove > 6000) {
+    live.moving = false;   // stopped: the arrow goes back to a dot
+  }
+  liveUpdate();
+}
+
+function liveUpdate() {
+  if (!mapVisible || navState) return;
+  var st = views[lastKind];
+  if (!st || !st.markers) return;
+  if (lastKind === 'home' && st.follow && me) {
+    var v = st.view, t = followView(v), need = false;
+    if (angleDiff(v.heading || 0, t.heading || 0) > 12) need = true;
+    else {
+      var sp = screenPos(me, v);
+      var ax = v.w / 2, ay = v.h / 2 + (homeDrive ? DRIVE_AHEAD * v.h : 0);
+      var dd = Math.sqrt((sp[0] - ax) * (sp[0] - ax) + (sp[1] - ay) * (sp[1] - ay));
+      need = dd > (homeDrive ? 14 : Math.min(v.w, v.h) * 0.22);
+    }
+    if (need && Date.now() - live.lastRender > 1200 && msg.pending() < 6) {
+      st.view = t;
+      streamMap(st.seq, t, st.markers(t), null, true);
+      maybeFetchPois(t);
+      return;
+    }
+  }
+  sendMarkers(st);
+}
+
+// --- Places on the map ---------------------------------------------------------
+function poiCategory(t) {
+  t = t || '';
+  if (/hotel|lodging|motel|inn$|hostel|resort|bed_and_breakfast/.test(t)) return 4;
+  if (/restaurant|food|meal|cafe|coffee|^bar$|_bar$|pub|bakery|ice_cream|dessert|tea|juice|diner|pizza|sandwich|steak|brunch/.test(t)) return 0;
+  if (/park|garden|beach|hiking|nature|campground|zoo|playground/.test(t)) return 2;
+  if (/museum|gallery|attraction|theater|theatre|library|landmark|monument|church|stadium|aquarium|cinema|movie/.test(t)) return 3;
+  if (/store|shop|mall|market|supermarket|grocery|boutique|pharmacy|drugstore/.test(t)) return 1;
+  return 5;
+}
+
+var POI_CELL = 512;   // map pixels per lookup area (about one Google map picture)
+
+function poiCell(v, dx, dy) {
+  var z = Math.min(18, v.zoom);
+  var c = geo.project(v.center[0], v.center[1], z);
+  return [z, Math.floor(c[0] / POI_CELL) + (dx || 0), Math.floor(c[1] / POI_CELL) + (dy || 0)];
+}
+
+// Gather the places near this view from what we've already looked up
+function rebuildPois(v) {
+  var seen = {}, out = [];
+  for (var dy = -1; dy <= 1; dy++) {
+    for (var dx = -1; dx <= 1; dx++) {
+      var list = poiCache[poiCell(v, dx, dy).join(':')] || [];
+      list.forEach(function (pl) {
+        if (seen[pl.placeId] || out.length >= 60) return;
+        seen[pl.placeId] = true;
+        out.push(pl);
+      });
+    }
+  }
+  pois = out;
+}
+
+function maybeFetchPois(v) {
+  if (!S.showPois || v.zoom < 15 || !google.hasKey()) { pois = []; return; }
+  rebuildPois(v);
+  var cell = poiCell(v);
+  var key = cell.join(':');
+  if (poiCache[key] || poiState.busy || Date.now() < poiState.failUntil) return;
+  poiState.busy = true;
+  var z = cell[0];
+  var center = geo.unproject((cell[1] + 0.5) * POI_CELL, (cell[2] + 0.5) * POI_CELL, z);
+  var mpp = 156543.03 * Math.cos(geo.rad(center[0])) / Math.pow(2, z);
+  var radius = Math.max(150, Math.min(3000, mpp * POI_CELL * 0.72));
+  google.searchPois(center, radius, function (err, list) {
+    poiState.busy = false;
+    if (err) {
+      console.log('places on map: ' + (err.text || err.title));
+      poiState.failUntil = Date.now() + 60000;
+      return;
+    }
+    list.forEach(function (pl) { pl.cat = poiCategory(pl.primaryType); });
+    poiCache[key] = list;
+    var keys = Object.keys(poiCache);
+    if (keys.length > 40) delete poiCache[keys[0]];
+    var st = views.home;
+    if (st && lastKind === 'home' && mapVisible) {
+      rebuildPois(st.view);
+      sendMarkers(st);
+      maybeFetchPois(st.view);   // the area you're looking at may have moved meanwhile
+    }
   });
 }
 
@@ -511,7 +785,7 @@ function onResultsMap(p) {
   var list = results;
   showView(p.seq, 'results', { center: fit.center, zoom: fit.zoom, w: size[0], h: size[1] }, function (v) {
     var markers = list.map(function (r, i) { return markerFor([r.lat, r.lng], v, P.MK.PIN, i); });
-    if (me) markers.unshift(markerFor(me, v, P.MK.ME));
+    markers.unshift(meMarker(v));
     return markers;
   }, restore);
 }
@@ -602,6 +876,7 @@ function onSelect(p) {
       if (f.lat === undefined || f.lat === null || f.lat === '') { d.lat = undefined; d.lng = undefined; }
     }
   } else if (src === P.SRC.RECENTS) d = settings.recents()[idx];
+  else if (src === P.SRC.POI && pois[idx]) d = JSON.parse(JSON.stringify(pois[idx]));
   else if (src === P.SRC.SUGGEST && suggestions[idx]) {
     var sg = suggestions[idx];
     d = { name: sg.name, address: sg.address, placeId: sg.placeId, fromSuggest: true };
@@ -621,7 +896,7 @@ function onPlaceMap(p) {
     var base = { center: geo.unproject(q[0], q[1] - 10, 16), zoom: 16, w: size[0], h: size[1] };
     showView(p.seq, 'place', base, function (v) {
       var markers = [markerFor([d.lat, d.lng], v, P.MK.DEST)];
-      if (me) markers.unshift(markerFor(me, v, P.MK.ME));
+      markers.unshift(meMarker(v));
       return markers;
     }, false);
   });
@@ -999,6 +1274,185 @@ function onNavStart(p) {
   });
 }
 
+// --- Place info page (ratings, hours, reviews, photos) ---------------------------
+function plainText(t) {
+  return String(t || '').replace(/[   ‎‏ ]/g, ' ').replace(/[\x1e\x1f]/g, ' ');
+}
+
+function clockText(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  var h = d.getHours(), m = d.getMinutes();
+  var mm = (m < 10 ? '0' : '') + m;
+  if (S.imperial) return (h % 12 || 12) + (m ? ':' + mm : '') + (h < 12 ? ' AM' : ' PM');
+  return h + ':' + mm;
+}
+
+function dayText(iso) {
+  var d = new Date(iso), now = new Date();
+  if (isNaN(d.getTime()) || d.toDateString() === now.toDateString()) return '';
+  if (d.toDateString() === new Date(now.getTime() + 86400000).toDateString()) return ' tomorrow';
+  return ' ' + ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+}
+
+function openLine(inf) {
+  if (inf.status === 'CLOSED_PERMANENTLY') return { text: 'Permanently closed', known: true, open: false };
+  if (inf.status === 'CLOSED_TEMPORARILY') return { text: 'Temporarily closed', known: true, open: false };
+  if (inf.openNow === true) {
+    if (inf.always) return { text: 'Open 24 hours', known: true, open: true };
+    return { text: 'Open' + (inf.nextClose ? ' · Closes ' + clockText(inf.nextClose) + dayText(inf.nextClose) : ''), known: true, open: true };
+  }
+  if (inf.openNow === false) {
+    return { text: 'Closed' + (inf.nextOpen ? ' · Opens ' + clockText(inf.nextOpen) + dayText(inf.nextOpen) : ''), known: true, open: false };
+  }
+  return { text: '', known: false, open: false };
+}
+
+// "Monday: 11:00 AM – 10:00 PM" -> "Mon  11 AM–10 PM"
+function shortHours(h) {
+  h = plainText(h).replace(/\s+/g, ' ').trim();
+  h = h.replace(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*day:/, '$1');
+  return h.replace(/:00(?= ?[AP]M)/g, '').replace(/ ?– ?/g, '–');
+}
+
+function domainOf(u) {
+  var m = /^[a-z]+:\/\/(?:www\.)?([^\/?#]+)/i.exec(u || '');
+  return m ? m[1] : '';
+}
+
+function sendInfo(inf) {
+  info = inf;
+  var ol = openLine(inf);
+  var meta = [];
+  if (inf.price) meta.push(inf.price);
+  if (inf.type) meta.push(inf.type);
+  if (me && inf.lat !== undefined) meta.push(fmt.distance(geo.haversine(me, [inf.lat, inf.lng]), S.imperial));
+  var small = watch.inbox < 4000;
+  var items = [];
+  if (inf.summary) items.push({ title: '', sub: fmt.clip(plainText(inf.summary), small ? 140 : 240), icon: 1 });
+  if (inf.phone) items.push({ title: plainText(inf.phone), sub: '', icon: 2 });
+  if (inf.website) items.push({ title: domainOf(inf.website), sub: '', icon: 3 });
+  if (inf.hours.length) {
+    items.push({ title: 'Hours', sub: inf.hours.map(shortHours).join('\n'), icon: 4 });
+  }
+  var revLen = small ? 160 : 320;
+  inf.reviews.slice(0, 5).forEach(function (r) {
+    if (!r.text) return;
+    items.push({ title: fmt.clip(plainText(r.author), 30) + '\n' + plainText(r.when), sub: fmt.clip(plainText(r.text), revLen), icon: 5, extra: Math.round(r.rating) });
+  });
+  if (watch.lowmem) return sendInfoText(inf, ol, meta);
+  var room = watch.inbox - 360;
+  var packed = fmt.packList(items);
+  while (items.length > 1 && utf8Len(packed) > room) {
+    items.pop();
+    packed = fmt.packList(items);
+  }
+  send({
+    cmd: CMD.INFO_DATA,
+    text: fmt.clip(plainText(inf.name), 60),
+    text2: fmt.clip(meta.join(' · '), 60),
+    text3: fmt.clip(ol.text, 44),
+    text4: fmt.clip(plainText(inf.fullAddress || inf.address), 90),
+    num: Math.round((inf.rating || 0) * 10),
+    num2: inf.ratingCount || 0,
+    flags: (ol.known ? 1 : 0) | (ol.open ? 2 : 0),
+    idx: inf.photos.length,
+    mode: poiCategory(inf.primaryType),
+    list: packed || ''
+  });
+}
+
+// Pebble Time / Time Round: the same page as plain text (no photos)
+function sendInfoText(inf, ol, meta) {
+  var lines = [];
+  if (inf.rating) lines.push('Rated ' + inf.rating.toFixed(1) + ' of 5 (' + inf.ratingCount + ')');
+  if (meta.length) lines.push(meta.join(' · '));
+  if (ol.text) lines.push(ol.text);
+  var body = lines.join('\n');
+  var more = [];
+  if (inf.summary) more.push(fmt.clip(plainText(inf.summary), 160));
+  more.push(plainText(inf.fullAddress || inf.address));
+  if (inf.phone) more.push(plainText(inf.phone));
+  if (inf.website) more.push(domainOf(inf.website));
+  if (inf.hours.length) more.push(inf.hours.map(shortHours).join('\n'));
+  inf.reviews.slice(0, 3).forEach(function (r) {
+    if (r.text) more.push(plainText(r.author) + ' · ' + Math.round(r.rating) + '/5 · ' + plainText(r.when) + '\n' + fmt.clip(plainText(r.text), 150));
+  });
+  more.forEach(function (t) {
+    if (t && utf8Len(body + '\n\n' + t) < 900) body += '\n\n' + t;
+  });
+  send({ cmd: CMD.INFO_DATA, text: fmt.clip(plainText(inf.name), 44), list: body });
+}
+
+function onInfo(p) {
+  if (needKey()) return;
+  setMapVisible(false);
+  var src = p.mode, idx = p.idx;
+  function got(err, pl) {
+    if (err) return sendError(err);
+    function show(id) {
+      for (var i = 0; i < infoCache.length; i++) if (infoCache[i].placeId === id) return sendInfo(infoCache[i]);
+      google.placeInfo(id, function (e2, inf) {
+        if (e2) return sendError(e2);
+        infoCache.unshift(inf);
+        if (infoCache.length > 8) infoCache.pop();
+        sendInfo(inf);
+      });
+    }
+    if (pl.placeId) return show(pl.placeId);
+    google.searchText([pl.name, pl.address || pl.fullAddress].filter(Boolean).join(' '), me, function (e3, list) {
+      if (e3 || !list || !list.length) {
+        return sendError(e3 || { code: P.ERR.NO_RESULTS, title: 'No details', text: 'Google has no details for this place.' });
+      }
+      pl.placeId = list[0].placeId;
+      show(pl.placeId);
+    });
+  }
+  if (src === P.SRC.RESULTS && results[idx]) return got(null, results[idx]);
+  if (src === P.SRC.POI && pois[idx]) return got(null, pois[idx]);
+  if (src === P.SRC.DEST) return withDest(got);
+  got({ code: P.ERR.API, text: 'That place is no longer available.' });
+}
+
+function onPhoto(p) {
+  setMapVisible(false);
+  currentMapSeq = p.seq;
+  var token = ++renderToken;
+  refreshFn = null;
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  var ph = info && info.photos[p.idx];
+  if (!ph) return;
+  var w = Math.max(16, Math.min(buf.w, p.width || watch.w)), h = Math.max(16, Math.min(buf.h, p.height || 100));
+  var key = ph.name + '|' + w + 'x' + h + '|' + watch.fmt;
+  var seq = p.seq;
+  function push(img) {
+    if (seq !== currentMapSeq || token !== renderToken) return;
+    pushImage(seq, img, { c: [0, 0], ref: 0, v: [0, 0] }, { zoom: 0, heading: 0, key: 'photo' }, null);
+  }
+  for (var i = 0; i < photoCache.length; i++) if (photoCache[i].key === key) return push(photoCache[i].img);
+  google.placePhoto(ph.name, Math.min(1200, w * 3), Math.min(1200, h * 3), function (err, bytes) {
+    if (token !== renderToken) return;
+    if (err) {
+      console.log('photo: ' + (err.text || err.title));
+      return toast('Photo didn\'t load');
+    }
+    var img;
+    try {
+      var d = bytes[0] === 0x89 ? image.decodePNG(bytes) : (function () {
+        var j = jpeg(bytes, { useTArray: true, formatAsRGBA: false });
+        return { width: j.width, height: j.height, rgb: j.data };
+      })();
+      img = image.photo(d.rgb, d.width, d.height, w, h, watch.fmt);
+    } catch (e) {
+      console.log('photo decode: ' + e.message);
+      return toast('Photo didn\'t load');
+    }
+    photoCache.unshift({ key: key, img: img });
+    if (photoCache.length > 6) photoCache.pop();
+    push(img);
+  });
+}
+
 // --- Favorites --------------------------------------------------------------
 function onFavList() {
   var favs = settings.favorites();
@@ -1057,6 +1511,7 @@ function onMessage(e) {
         watch.mic = !!(p.mode & 1);
         watch.round = !!(p.mode & 2);
         watch.touch = !!(p.mode & 4);
+        watch.lowmem = !!(p.mode & 8);
         watch.inbox = p.idx > 0 ? p.idx : 4096;
         voice.setInbox(watch.inbox);
         if (p.text && /^\d+,\d+$/.test(p.text)) {
@@ -1069,17 +1524,32 @@ function onMessage(e) {
         sendStatus();
         break;
       case CMD.HOME_MAP: wimg = null; onHomeMap(p); break;
+      case CMD.CANCEL: setMapVisible(false); break;
+      case CMD.INFO: onInfo(p); break;
+      case CMD.PHOTO: onPhoto(p); break;
+      case CMD.HOME_DRIVE: {
+        homeDrive = p.idx === 1;
+        var hs = views.home;
+        if (hs && lastKind === 'home' && hs.markers) {
+          if (p.seq !== undefined) hs.seq = p.seq;
+          hs.follow = true;
+          hs.view = followView(hs.view);
+          streamMap(hs.seq, hs.view, hs.markers(hs.view));
+          maybeFetchPois(hs.view);
+        }
+        break;
+      }
       case CMD.SEARCH: onSearch(p); break;
       case CMD.NEARBY: onNearby(p); break;
       case CMD.AUTOCOMPLETE: onAutocomplete(p); break;
-      case CMD.RESULTS_MAP: wimg = null; onResultsMap(p); break;
+      case CMD.RESULTS_MAP: wimg = null; setMapVisible(true); onResultsMap(p); break;
       case CMD.SELECT: onSelect(p); break;
-      case CMD.PLACE_MAP: wimg = null; onPlaceMap(p); break;
+      case CMD.PLACE_MAP: wimg = null; setMapVisible(true); onPlaceMap(p); break;
       case CMD.MODE_TIMES: onModeTimes(); break;
-      case CMD.ROUTE: wimg = null; onRoute(p); break;
+      case CMD.ROUTE: wimg = null; setMapVisible(true); onRoute(p); break;
       case CMD.STEPS: onSteps(); break;
-      case CMD.NAV_START: wimg = null; onNavStart(p); break;
-      case CMD.NAV_STOP: stopNav(); break;
+      case CMD.NAV_START: wimg = null; mapVisible = false; onNavStart(p); updateTracking(); break;
+      case CMD.NAV_STOP: stopNav(); mapVisible = false; updateTracking(); break;
       case CMD.FAV_LIST: onFavList(); break;
       case CMD.FAV_TOGGLE: onFavToggle(); break;
       case CMD.FAV_DELETE:
@@ -1157,6 +1627,9 @@ Pebble.addEventListener('webviewclosed', function (e) {
   tiles.clear();
   route = null;
   sendStatus();
+  if (!S.showPois) { pois = []; poiCache = {}; }
+  updateTracking();
+  if (views.home && lastKind === 'home' && mapVisible) sendMarkers(views.home);
   if (google.hasKey() && S.apiKey !== oldKey) {
     toast('Checking your key...');
     google.checkKey(me, function (res) {

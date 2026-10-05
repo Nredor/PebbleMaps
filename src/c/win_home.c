@@ -16,6 +16,9 @@ static bool s_hello_sent;
 static AppTimer *s_hello_timer;
 static int s_hello_tries;
 static char s_status[64] = "Connecting to phone";
+static bool s_drive;          // driving mode: the map turns with you, you near the bottom
+static GPoint s_compass;
+#define PERSIST_DRIVE 5
 
 Window *home_window_get(void) { return s_window; }
 
@@ -37,7 +40,7 @@ static void send_hello(void) {
   m.width = b.size.w;
   m.height = b.size.h;
   m.num = PBL_IF_COLOR_ELSE(FMT_4BIT, FMT_1BIT);
-  m.mode = (g_app.has_mic ? 1 : 0) | (PBL_IF_ROUND_ELSE(1, 0) << 1) | (g_app.touch ? 4 : 0);
+  m.mode = (g_app.has_mic ? 1 : 0) | (PBL_IF_ROUND_ELSE(1, 0) << 1) | (g_app.touch ? 4 : 0) | (PM_LOWMEM ? 8 : 0);
   m.idx = g_app.inbox_size;
   GSize bs = map_buffer_size();
   snprintf(m.text, sizeof(m.text), "%d,%d", bs.w, bs.h);
@@ -48,7 +51,7 @@ static void send_hello(void) {
 // restore = keep the last view the user moved to (when coming back to this screen)
 static void request_map(bool restore) {
   GRect f = map_frame(layer_get_bounds(window_get_root_layer(s_window)));
-  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, restore ? 1 : 0);
+  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, (restore ? 1 : 0) | (s_drive ? 2 : 0));
   s_map_requested = true;
   strncpy(s_status, "Finding you", sizeof(s_status));
   dots_layer_set_running(s_dots, true);
@@ -137,6 +140,16 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     graphics_draw_text(ctx, g_app.has_mic ? PBL_IF_ROUND_ELSE("Search", "Search here") : "Explore", g_fonts.small,
                        GRect(pill.origin.x + 25, pill.origin.y + (ph - g_fonts.small_h) / 2 - 3, pill.size.w - 30, ph),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  }
+
+  // Driving mode: a compass shows where north is (tap it for north up)
+  if (s_drive && g_map.bmp) {
+#ifdef PBL_ROUND
+    s_compass = GPoint(mf.size.w / 2 + 10, b.size.h / 9 + g_fonts.small_h + 26);
+#else
+    s_compass = GPoint(18, g_fonts.small_h + 34);
+#endif
+    draw_compass(ctx, s_compass, g_map.rheading);
   }
 
   // Status bubble
@@ -239,8 +252,23 @@ static void start_search(void) {
 }
 
 // --- Map controls ------------------------------------------------------------
+static void toggle_drive(void) {
+  s_drive = !s_drive;
+  persist_write_bool(PERSIST_DRIVE, s_drive);
+  s_bar.extra2_up_color = s_drive ? C_BLUE : C_ICON;
+  OutMsg m;
+  comm_msg_init(&m, CMD_HOME_DRIVE);
+  m.idx = s_drive ? 1 : 0;
+  m.seq = g_map.seq;
+  comm_send(&m);
+  ui_toast(s_window, s_drive ? "Driving mode: map turns with you" : "North up");
+  layer_mark_dirty(s_canvas);
+}
+
 static void bar_cb(MapBarEvent ev, void *ctx) {
-  if (ev == MB_EV_EXTRA_UP) {
+  if (ev == MB_EV_EXTRA2_UP) {
+    toggle_drive();
+  } else if (ev == MB_EV_EXTRA_UP) {
     map_adjust(ADJ_RESET, 0, 0);
   } else if (ev == MB_EV_EXTRA_DOWN) {
     mapbar_close(&s_bar);
@@ -301,8 +329,20 @@ static void touch_cb(const TouchEvent *e, void *ctx) {
 }
 
 static void map_tap(GPoint p, void *ctx) {
+  if (!g_app.configured) { show_setup(); return; }
+  int dx = p.x - s_compass.x, dy = p.y - s_compass.y;
+  if (s_drive && g_map.bmp && dx * dx + dy * dy <= 18 * 18) {
+    toggle_drive();
+    return;
+  }
+  bool in_pill = !s_bar.open && p.y < g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0);
+  if (!in_pill) {
+    // a place on the map: its photos, hours and reviews
+    int poi = map_poi_near(p, map_frame(layer_get_bounds(s_canvas)), 18);
+    if (poi >= 0) info_window_push(SRC_POI, poi, NULL);
+    return;
+  }
   // tapping the search bar opens the keyboard (the mic button is for voice)
-  if (s_bar.open || p.y >= g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0)) return;
 #if KEYBOARD_AVAILABLE
   if (!g_app.configured) { show_setup(); return; }
   open_keyboard();
@@ -325,6 +365,9 @@ static void window_load(Window *window) {
   mapbar_init(&s_bar, s_canvas, mf.size, ICON_MYLOC, ICON_STAR, bar_cb, NULL);
   s_bar.extra_up_color = C_BLUE;
   s_bar.extra_down_color = C_STAR;
+  s_drive = persist_exists(PERSIST_DRIVE) && persist_read_bool(PERSIST_DRIVE);
+  s_bar.extra2_up = ICON_CAR;
+  s_bar.extra2_up_color = s_drive ? C_BLUE : C_ICON;
   maptouch_init(&s_touch, mf, map_tap, NULL, &s_bar);
 }
 
@@ -342,6 +385,7 @@ static void window_appear(Window *window) {
 
 static void window_disappear(Window *window) {
   comm_clear_handler(handle);
+  comm_cmd(CMD_CANCEL);   // map not showing: the phone can rest the GPS
   map_set_observer(NULL);
   ui_toast_cancel();
   mapbar_deinit(&s_bar);

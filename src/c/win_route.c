@@ -197,6 +197,7 @@ static void window_appear(Window *window) {
 
 static void window_disappear(Window *window) {
   comm_clear_handler(handle);
+  comm_cmd(CMD_CANCEL);
   map_set_observer(NULL);
   ui_toast_cancel();
   mapbar_deinit(&s_bar);

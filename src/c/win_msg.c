@@ -10,8 +10,9 @@ typedef struct {
   TextLayer *body;
   IconId icon;
   bool pop_on_configured;
+  bool info;              // low-memory place info page (text only)
   char title_text[48];
-  char body_text[256];
+  char *body_text;
 } MsgWin;
 
 static MsgWin *s_setup;  // only one setup screen at a time
@@ -26,46 +27,76 @@ static void icon_update(Layer *layer, GContext *ctx) {
   icon_draw(ctx, mw->icon, GPoint(b.size.w / 2, b.size.h / 2), b.size.h * 6 / 10, c, PBL_IF_COLOR_ELSE(GColorCeleste, GColorWhite));
 }
 
+static void layout(MsgWin *mw);
+
 static void handle(int cmd, DictionaryIterator *it, void *ctx) {
   MsgWin *mw = ctx;
+#if PM_LOWMEM
+  if (mw->info && cmd == CMD_INFO_DATA) {
+    strncpy(mw->title_text, tuple_str(it, MESSAGE_KEY_text), sizeof(mw->title_text) - 1);
+    const char *body = tuple_str(it, MESSAGE_KEY_list);
+    char *nb = malloc(strlen(body) + 1);
+    if (nb) {
+      strcpy(nb, body);
+      free(mw->body_text);
+      mw->body_text = nb;
+    }
+    text_layer_set_text(mw->title, mw->title_text);
+    text_layer_set_text(mw->body, mw->body_text);
+    layout(mw);
+    return;
+  }
+  if (mw->info && cmd == CMD_ERROR) {
+    window_stack_remove(mw->window, false);
+    show_error(it);
+    return;
+  }
+#endif
   if (cmd == CMD_STATUS && mw->pop_on_configured && g_app.configured) {
     window_stack_remove(mw->window, true);
   }
+}
+
+// Size the title and body to their text
+static void layout(MsgWin *mw) {
+  GRect b = layer_get_bounds(window_get_root_layer(mw->window));
+  int pad = PBL_IF_ROUND_ELSE(22, 8);
+  int y = PBL_IF_ROUND_ELSE(14, 8) + 48;
+  layer_set_frame(text_layer_get_layer(mw->title), GRect(pad, y, b.size.w - pad * 2, 200));
+  GSize ts = text_layer_get_content_size(mw->title);
+  layer_set_frame(text_layer_get_layer(mw->title), GRect(pad, y, b.size.w - pad * 2, ts.h + 6));
+  y += ts.h + 6;
+  layer_set_frame(text_layer_get_layer(mw->body), GRect(pad, y, b.size.w - pad * 2, 3000));
+  GSize bs = text_layer_get_content_size(mw->body);
+  layer_set_frame(text_layer_get_layer(mw->body), GRect(pad, y, b.size.w - pad * 2, bs.h + 8));
+  y += bs.h + PBL_IF_ROUND_ELSE(40, 16);
+  scroll_layer_set_content_size(mw->scroll, GSize(b.size.w, y));
 }
 
 static void window_load(Window *window) {
   MsgWin *mw = window_get_user_data(window);
   Layer *root = window_get_root_layer(window);
   GRect b = layer_get_bounds(root);
-  int pad = PBL_IF_ROUND_ELSE(22, 8);
   mw->scroll = scroll_layer_create(b);
   scroll_layer_set_click_config_onto_window(mw->scroll, window);
 #ifdef PBL_ROUND
   scroll_layer_set_paging(mw->scroll, true);
 #endif
-  int y = PBL_IF_ROUND_ELSE(14, 8);
-  mw->icon_layer = layer_create_with_data(GRect(b.size.w / 2 - 22, y, 44, 44), sizeof(MsgWin *));
+  mw->icon_layer = layer_create_with_data(GRect(b.size.w / 2 - 22, PBL_IF_ROUND_ELSE(14, 8), 44, 44), sizeof(MsgWin *));
   *(MsgWin **)layer_get_data(mw->icon_layer) = mw;
   layer_set_update_proc(mw->icon_layer, icon_update);
   scroll_layer_add_child(mw->scroll, mw->icon_layer);
-  y += 48;
-  mw->title = text_layer_create(GRect(pad, y, b.size.w - pad * 2, 60));
+  mw->title = text_layer_create(GRect(0, 0, b.size.w, 60));
   text_layer_set_font(mw->title, g_fonts.title);
   text_layer_set_text_alignment(mw->title, GTextAlignmentCenter);
   text_layer_set_text(mw->title, mw->title_text);
-  GSize ts = text_layer_get_content_size(mw->title);
-  layer_set_frame(text_layer_get_layer(mw->title), GRect(pad, y, b.size.w - pad * 2, ts.h + 6));
   scroll_layer_add_child(mw->scroll, text_layer_get_layer(mw->title));
-  y += ts.h + 6;
-  mw->body = text_layer_create(GRect(pad, y, b.size.w - pad * 2, 2000));
-  text_layer_set_font(mw->body, g_fonts.body);
-  text_layer_set_text_alignment(mw->body, GTextAlignmentCenter);
+  mw->body = text_layer_create(GRect(0, 0, b.size.w, 2000));
+  text_layer_set_font(mw->body, mw->info ? g_fonts.small : g_fonts.body);
+  text_layer_set_text_alignment(mw->body, mw->info ? PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft) : GTextAlignmentCenter);
   text_layer_set_text(mw->body, mw->body_text);
-  GSize bs = text_layer_get_content_size(mw->body);
-  layer_set_frame(text_layer_get_layer(mw->body), GRect(pad, y, b.size.w - pad * 2, bs.h + 8));
   scroll_layer_add_child(mw->scroll, text_layer_get_layer(mw->body));
-  y += bs.h + PBL_IF_ROUND_ELSE(40, 16);
-  scroll_layer_set_content_size(mw->scroll, GSize(b.size.w, y));
+  layout(mw);
   layer_add_child(root, scroll_layer_get_layer(mw->scroll));
 }
 
@@ -84,19 +115,23 @@ static void window_unload(Window *window) {
   layer_destroy(mw->icon_layer);
   scroll_layer_destroy(mw->scroll);
   if (s_setup == mw) s_setup = NULL;
+  free(mw->body_text);
   free(mw);
   window_destroy(window);
 }
 
-void msg_window_push(IconId icon, const char *title, const char *body, bool pop_on_configured) {
-  if (pop_on_configured && s_setup) return;
+static MsgWin *msg_create(IconId icon, const char *title, const char *body) {
   MsgWin *mw = calloc(1, sizeof(MsgWin));
-  if (!mw) return;
+  if (!mw) return NULL;
+  mw->body_text = malloc(strlen(body) + 1);
+  if (!mw->body_text) { free(mw); return NULL; }
+  strcpy(mw->body_text, body);
   mw->icon = icon;
-  mw->pop_on_configured = pop_on_configured;
   strncpy(mw->title_text, title, sizeof(mw->title_text) - 1);
-  strncpy(mw->body_text, body, sizeof(mw->body_text) - 1);
-  if (pop_on_configured) s_setup = mw;
+  return mw;
+}
+
+static void msg_show(MsgWin *mw) {
   mw->window = window_create();
   window_set_user_data(mw->window, mw);
   window_set_background_color(mw->window, C_BG);
@@ -106,6 +141,31 @@ void msg_window_push(IconId icon, const char *title, const char *body, bool pop_
   });
   window_stack_push(mw->window, true);
 }
+
+void msg_window_push(IconId icon, const char *title, const char *body, bool pop_on_configured) {
+  if (pop_on_configured && s_setup) return;
+  MsgWin *mw = msg_create(icon, title, body);
+  if (!mw) return;
+  mw->pop_on_configured = pop_on_configured;
+  if (pop_on_configured) s_setup = mw;
+  msg_show(mw);
+}
+
+#if PM_LOWMEM
+// Pebble Time / Time Round: the place info page as text (rating, hours, reviews)
+void info_window_push(int src, int idx, const char *title) {
+  if (heap_bytes_free() < 4000) list_windows_close_all();
+  MsgWin *mw = msg_create(ICON_INFO, title ? title : "", "Loading...");
+  if (!mw) return;
+  mw->info = true;
+  msg_show(mw);
+  OutMsg m;
+  comm_msg_init(&m, CMD_INFO);
+  m.mode = src;
+  m.idx = idx;
+  comm_send(&m);
+}
+#endif
 
 void show_error(DictionaryIterator *it) {
   int code = tuple_int(it, MESSAGE_KEY_num, ERR_API);

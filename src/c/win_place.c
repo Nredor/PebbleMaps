@@ -96,9 +96,9 @@ static void canvas_update(Layer *layer, GContext *ctx) {
     mapbar_draw(&s_bar, ctx, b);
     return;
   }
-  // strip: star / directions / quick-go
+  // strip: star / directions / info
   StripIcons ic = { .up = s_fav ? ICON_STAR : ICON_STAR_OUTLINE, .select = ICON_NONE,
-                    .down = icon_for_mode(s_mode), .up_color = s_fav ? C_STAR : C_STAR_EDGE };
+                    .down = ICON_INFO, .up_color = s_fav ? C_STAR : C_STAR_EDGE, .down_color = C_BLUE };
   draw_action_strip(ctx, b, &ic);
   int cx = PBL_IF_ROUND_ELSE(b.size.w - STRIP_W / 2 - 4, b.size.w - STRIP_W / 2);
   icon_draw(ctx, ICON_DIRECTIONS, GPoint(cx, b.size.h / 2), STRIP_W - 4, C_BLUE, GColorWhite);
@@ -124,7 +124,7 @@ static void select_click(ClickRecognizerRef r, void *ctx) {
 static void down_click(ClickRecognizerRef r, void *ctx) {
   if (mapbar_button(&s_bar, BUTTON_ID_DOWN)) return;
   if (!s_loaded) return;
-  route_window_push(s_mode);
+  info_window_push(SRC_DEST, 0, s_name);
 }
 
 static void back_click(ClickRecognizerRef r, void *ctx) {
@@ -150,11 +150,16 @@ static void map_tap(GPoint p, void *ctx) {
   if (!s_bar.open && p.y > map_h(b) - 24 && p.x < 30) mapbar_open(&s_bar);
 }
 
+
 static void touch_cb(const TouchEvent *e, void *ctx) {
   if (maptouch_event(&s_touch, e)) return;
   if (e->type != TouchEvent_Liftoff || e->non_navigational) return;
   GRect b = layer_get_bounds(s_canvas);
-  if (e->x < b.size.w - STRIP_W) return;
+  if (e->x < b.size.w - STRIP_W) {
+    // the name card: more info
+    if (e->y > map_h(b) && s_loaded && !s_bar.open) info_window_push(SRC_DEST, 0, s_name);
+    return;
+  }
   if (e->y < b.size.h / 3) up_click(NULL, NULL);
   else if (e->y > b.size.h * 2 / 3) down_click(NULL, NULL);
   else select_click(NULL, NULL);
@@ -184,6 +189,7 @@ static void window_appear(Window *window) {
 
 static void window_disappear(Window *window) {
   comm_clear_handler(handle);
+  comm_cmd(CMD_CANCEL);
   map_set_observer(NULL);
   ui_toast_cancel();
   mapbar_deinit(&s_bar);
@@ -210,6 +216,11 @@ void place_window_push(int src, int idx, const char *title) {
   s_fav = false;
   strncpy(s_name, title ? title : "", sizeof(s_name) - 1);
   s_type[0] = s_addr[0] = s_dist[0] = 0;
+  // short on memory (Pebble Time, Time Round): drop the screens underneath first
+  if (heap_bytes_free() < 3000) {
+    list_windows_close_all();
+    results_window_close();
+  }
   s_window = window_create();
   window_set_background_color(s_window, C_BG);
   window_set_click_config_provider(s_window, click_config);

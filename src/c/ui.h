@@ -32,7 +32,8 @@ typedef enum {
   ICON_PHARMACY, ICON_PLUG, ICON_PARKING, ICON_BOOK, ICON_MUTE,
   ICON_SOUND, ICON_CLOSE, ICON_ZOOM_IN, ICON_ZOOM_OUT, ICON_MAP,
   ICON_KEY, ICON_MOVE, ICON_MORE, ICON_UP, ICON_DOWN, ICON_LEFT, ICON_RIGHT,
-  ICON_EYE, ICON_EYE_OFF, ICON_STOP, ICON_NORTH, ICON_HEADING, ICON_TRIANGLE, ICON_VIBRATE, ICON_VOL_UP, ICON_VOL_DOWN, ICON_COUNT
+  ICON_EYE, ICON_EYE_OFF, ICON_STOP, ICON_NORTH, ICON_HEADING, ICON_TRIANGLE, ICON_VIBRATE, ICON_VOL_UP, ICON_VOL_DOWN,
+  ICON_INFO, ICON_GLOBE, ICON_COUNT
 } IconId;
 
 // Fonts, chosen by the text-size setting (level 0 = standard, 1 = large, 2 = extra large)
@@ -62,6 +63,11 @@ void maneuver_draw(GContext *ctx, int code, GPoint c, int size, GColor fg, GColo
 void draw_pin(GContext *ctx, GPoint tip, int r, bool selected);
 void draw_me_dot(GContext *ctx, GPoint c, int r);
 void draw_puck(GContext *ctx, GPoint c, int r, int heading_deg);
+// A place on the map (small colored dot by category, POI_*)
+void draw_poi(GContext *ctx, GPoint c, int category);
+GColor poi_color(int category);
+// Small compass: the red tip points north on a map turned so map_heading is up
+void draw_compass(GContext *ctx, GPoint c, int map_heading);
 
 // Google "FAB": a filled circle with a white icon
 void draw_fab(GContext *ctx, GPoint c, int r, IconId icon, GColor fill);

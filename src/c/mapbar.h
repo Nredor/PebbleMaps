@@ -3,10 +3,10 @@
 #include "common.h"
 #include "ui.h"
 
-typedef enum { MB_EV_EXTRA_UP, MB_EV_EXTRA_DOWN, MB_EV_CLOSED, MB_EV_MOVED } MapBarEvent;
+typedef enum { MB_EV_EXTRA_UP, MB_EV_EXTRA_DOWN, MB_EV_CLOSED, MB_EV_MOVED, MB_EV_EXTRA2_UP, MB_EV_EXTRA2_DOWN } MapBarEvent;
 typedef void (*MapBarCallback)(MapBarEvent ev, void *ctx);
 
-enum { MB_PAGE_ZOOM = 0, MB_PAGE_DOLLY, MB_PAGE_PAN, MB_PAGE_EXTRA };
+enum { MB_PAGE_ZOOM = 0, MB_PAGE_DOLLY, MB_PAGE_PAN, MB_PAGE_EXTRA, MB_PAGE_EXTRA2 };
 
 typedef struct {
   bool open;
@@ -16,6 +16,8 @@ typedef struct {
   GSize frame;            // map area size (pan step)
   IconId extra_up, extra_down;
   GColor extra_up_color, extra_down_color;
+  IconId extra2_up, extra2_down;          // optional fifth page (home: driving mode)
+  GColor extra2_up_color, extra2_down_color;
   MapBarCallback cb;
   void *ctx;
 } MapBar;

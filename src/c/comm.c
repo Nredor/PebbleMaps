@@ -4,7 +4,7 @@
 #include "voice.h"
 #include "ui.h"
 
-#define QUEUE_LEN 6
+#define QUEUE_LEN (PM_LOWMEM ? 4 : 6)
 
 static CommHandler s_handler;
 static void *s_handler_ctx;
@@ -183,7 +183,7 @@ void comm_init(void) {
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
   uint32_t in_max = app_message_inbox_size_maximum();
-  uint32_t cap = 2048;  // 64 KB watches: memory is tight
+  uint32_t cap = PM_LOWMEM ? 1536 : 2048;  // 64 KB watches: memory is tight
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
   cap = 8192;
 #endif

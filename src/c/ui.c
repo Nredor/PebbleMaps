@@ -419,6 +419,20 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       break;
     }
     case ICON_VOL_UP:
+    case ICON_INFO:
+      // lowercase "i" in a ring
+      graphics_context_set_stroke_width(ctx, sw);
+      circle(ctx, 20, 20, 18, false);
+      circle(ctx, 20, 11, 3, true);
+      rect(ctx, 17, 17, 23, 31, 1);
+      rect(ctx, 14, 17, 23, 20, 0);
+      break;
+    case ICON_GLOBE:
+      graphics_context_set_stroke_width(ctx, sw);
+      circle(ctx, 20, 20, 17, false);
+      line(ctx, 4, 20, 36, 20);
+      graphics_draw_arc(ctx, GRect(P(12, 3).x, P(12, 3).y, S(16), S(34)), GOvalScaleModeFitCircle, 0, TRIG_MAX_ANGLE);
+      break;
     case ICON_VOL_DOWN: {
       static const int8_t spk2[] = {2, 14, 9, 14, 18, 6, 18, 34, 9, 26, 2, 26};
       poly(ctx, spk2, 6, true);
@@ -734,6 +748,61 @@ void draw_puck(GContext *ctx, GPoint c, int r, int heading_deg) {
   gpath_draw_outline(ctx, &po);
   graphics_context_set_fill_color(ctx, C_BLUE);
   gpath_draw_filled(ctx, &pi);
+}
+
+GColor poi_color(int cat) {
+#ifdef PBL_COLOR
+  switch (cat) {
+    case POI_FOOD: return GColorOrange;
+    case POI_SHOP: return GColorCobaltBlue;
+    case POI_NATURE: return GColorIslamicGreen;
+    case POI_SIGHTS: return GColorTiffanyBlue;
+    case POI_STAY: return GColorPurple;
+    default: return GColorDarkGray;
+  }
+#else
+  return GColorBlack;
+#endif
+}
+
+void draw_poi(GContext *ctx, GPoint c, int cat) {
+  int r = g_fonts.level >= 1 ? 5 : 4;
+#ifdef PBL_COLOR
+  graphics_context_set_antialiased(ctx, true);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_circle(ctx, c, r + 1);
+  graphics_context_set_fill_color(ctx, poi_color(cat));
+  graphics_fill_circle(ctx, c, r);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_circle(ctx, c, 1);
+#else
+  // hollow, so it reads differently from your (filled) dot
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_circle(ctx, c, r + 1);
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_circle(ctx, c, r - 1);
+#endif
+}
+
+void draw_compass(GContext *ctx, GPoint cc, int map_heading) {
+#ifdef PBL_COLOR
+  graphics_context_set_antialiased(ctx, true);
+#endif
+  graphics_context_set_fill_color(ctx, GColorWhite);
+  graphics_fill_circle(ctx, cc, 11);
+  graphics_context_set_stroke_color(ctx, C_DIVIDER);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_circle(ctx, cc, 11);
+  int32_t a = DEG_TO_TRIGANGLE(-map_heading);
+  int sx = sin_lookup(a) * 8 / TRIG_MAX_RATIO, sy = -cos_lookup(a) * 8 / TRIG_MAX_RATIO;
+  int px = cos_lookup(a) * 3 / TRIG_MAX_RATIO, py = sin_lookup(a) * 3 / TRIG_MAX_RATIO;
+  GPoint n[3] = { GPoint(cc.x + sx, cc.y + sy), GPoint(cc.x + px, cc.y + py), GPoint(cc.x - px, cc.y - py) };
+  GPoint so[3] = { GPoint(cc.x - sx, cc.y - sy), GPoint(cc.x + px, cc.y + py), GPoint(cc.x - px, cc.y - py) };
+  GPath pn = { .num_points = 3, .points = n }, ps = { .num_points = 3, .points = so };
+  graphics_context_set_fill_color(ctx, C_RED);
+  gpath_draw_filled(ctx, &pn);
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+  gpath_draw_filled(ctx, &ps);
 }
 
 void draw_fab(GContext *ctx, GPoint c, int r, IconId icon, GColor fill) {

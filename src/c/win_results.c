@@ -259,7 +259,9 @@ static void results_click_config(void *ctx) {
 static void map_tap(GPoint p, void *ctx) {
   GRect b = layer_get_bounds(s_canvas);
   if (p.y > b.size.h - card_h()) {
-    press(BUTTON_ID_SELECT);
+    // the card with the place's name: photos, hours and reviews
+    if (s_count) info_window_push(SRC_RESULTS, s_sel, s_items[s_sel].title);
+    else press(BUTTON_ID_SELECT);
     return;
   }
   int idx = map_pin_near(p, b, 26);
@@ -311,6 +313,7 @@ static void window_appear(Window *window) {
 
 static void window_disappear(Window *window) {
   comm_clear_handler(handle);
+  comm_cmd(CMD_CANCEL);
   map_set_observer(NULL);
   ui_toast_cancel();
   mapbar_deinit(&s_bar);
@@ -330,6 +333,8 @@ static void window_unload(Window *window) {
 
 static void push(void) {
   if (s_window) window_stack_remove(s_window, false);
+  // short on memory (Pebble Time, Time Round): drop the lists underneath first
+  if (heap_bytes_free() < 4000) list_windows_close_all();
   s_count = 0;
   s_sel = 0;
   s_loaded = false;

@@ -2,7 +2,7 @@
 #pragma once
 #include "common.h"
 
-#define MAX_MARKERS 12
+#define MAX_MARKERS 24
 
 typedef struct {
   int16_t x, y;
@@ -61,3 +61,5 @@ void map_draw(GContext *ctx, GRect frame, int selected);
 const Marker *map_marker_for(int index);
 // Nearest pin to a point (touch); returns result index or -1
 int map_pin_near(GPoint p, GRect frame, int max_dist);
+// Nearest place dot (home map) to a point; returns its index or -1
+int map_poi_near(GPoint p, GRect frame, int max_dist);

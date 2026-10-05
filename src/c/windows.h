@@ -20,6 +20,9 @@ void list_window_push(ListKind kind, int arg);
 void place_window_push(int src, int idx, const char *title);
 int place_default_mode(void);
 
+// Place info: photos, rating, hours, reviews (src = SRC_*, title may be NULL)
+void info_window_push(int src, int idx, const char *title);
+
 // Route overview
 void route_window_push(int mode);
 

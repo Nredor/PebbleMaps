@@ -13,7 +13,7 @@ void comm_clear_handler(CommHandler handler);
 #define OUT_NONE (-999999)
 typedef struct {
   int cmd, idx, mode, seq, width, height, num;
-  char text[160];
+  char text[PM_LOWMEM ? 120 : 160];
 } OutMsg;
 
 void comm_msg_init(OutMsg *m, int cmd);

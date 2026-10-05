@@ -75,6 +75,23 @@ function config() {
           label: 'Avoid ferries (driving)',
           defaultValue: false
         },
+        { type: 'heading', defaultValue: 'Map', size: 4 },
+        {
+          type: 'toggle',
+          messageKey: 'liveLocation',
+          label: 'Live location',
+          description: 'Your blue dot moves with you on the map (it turns into an arrow while you\'re moving). ' +
+            'Turn off to save battery: the map then shows where you were when you opened it.',
+          defaultValue: true
+        },
+        {
+          type: 'toggle',
+          messageKey: 'showPois',
+          label: 'Show places on the map',
+          description: 'Restaurants, shops, parks and more appear as small colored dots when you zoom in. ' +
+            'On Pebble Time 2 and Round 2, tap one for photos, hours and reviews.',
+          defaultValue: true
+        },
         { type: 'heading', defaultValue: 'Display', size: 4 },
         {
           type: 'select',
@@ -116,6 +133,10 @@ function config() {
             'Press Select (⋯) to switch to up/down, then left/right, then extra options. ' +
             'It goes back to normal after 5 seconds. On Pebble Time 2, drag the map with your finger, ' +
             'double-tap to zoom in, or press and hold to zoom out.<br><br>' +
+            '<strong>Driving mode:</strong> on the main map, open the map controls (Up) and press Select (⋯) until you see ' +
+            'the car, then press Up. The map turns with you and keeps you near the bottom. Press it again for north up.<br><br>' +
+            '<strong>Place info:</strong> on a place, press Down (<strong>i</strong>) for photos, hours and reviews. ' +
+            'Select shows the next photo; hold Select for directions.<br><br>' +
             '<strong>Results:</strong> Up/Down moves between pins, Select opens the place. ' +
             'Hold Select for map controls and the list view.<br><br>' +
             '<strong>Place and route screens:</strong> hold Select to move the map.<br><br>' +

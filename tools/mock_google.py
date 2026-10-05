@@ -243,6 +243,57 @@ def render_map(q):
     return buf.getvalue()
 
 
+def enrich(p, pid):
+    """Made-up details for the place info page (rating, hours, reviews, photos)."""
+    p = dict(p)
+    h = sum(ord(c) for c in pid)
+    p.setdefault("primaryType", "restaurant")
+    p.update({
+        "rating": round(3.6 + (h % 14) / 10.0, 1), "userRatingCount": 120 + h * 7 % 4000,
+        "priceLevel": ["PRICE_LEVEL_INEXPENSIVE", "PRICE_LEVEL_MODERATE", "PRICE_LEVEL_EXPENSIVE"][h % 3],
+        "businessStatus": "OPERATIONAL",
+        "currentOpeningHours": {"openNow": True, "nextCloseTime": "2030-01-01T05:00:00Z",
+                                "weekdayDescriptions": ["Monday: 11:00\u202fAM\u2009\u2013\u200910:00\u202fPM",
+                                                        "Tuesday: 11:00\u202fAM\u2009\u2013\u200910:00\u202fPM",
+                                                        "Wednesday: 11:00\u202fAM\u2009\u2013\u200910:00\u202fPM",
+                                                        "Thursday: 11:00\u202fAM\u2009\u2013\u200910:00\u202fPM",
+                                                        "Friday: 11:00\u202fAM\u2009\u2013\u200911:00\u202fPM",
+                                                        "Saturday: 10:00\u202fAM\u2009\u2013\u200911:00\u202fPM",
+                                                        "Sunday: 10:00\u202fAM\u2009\u2013\u20099:00\u202fPM"]},
+        "nationalPhoneNumber": "(555) 010-%04d" % (h % 10000),
+        "websiteUri": "https://www.example.com/",
+        "editorialSummary": {"text": "Cozy spot with a seasonal menu, friendly staff and a lively atmosphere."},
+        "reviews": [
+            {"authorAttribution": {"displayName": "Sam R."}, "rating": 5, "relativePublishTimeDescription": "2 weeks ago",
+             "text": {"text": "Great food and quick service. The window seats have a lovely view. Would come back."}},
+            {"authorAttribution": {"displayName": "Alex P."}, "rating": 4, "relativePublishTimeDescription": "a month ago",
+             "text": {"text": "Tasty and fairly priced. It gets busy around noon, so come early or expect a short wait."}},
+            {"authorAttribution": {"displayName": "Jordan K."}, "rating": 4, "relativePublishTimeDescription": "3 months ago",
+             "text": {"text": "Nice staff, good coffee, comfortable chairs."}},
+        ],
+        "photos": [{"name": "places/%s/photos/p%d" % (pid, k), "widthPx": 1200, "heightPx": 900} for k in range(4)],
+    })
+    return p
+
+
+def fake_photo(k):
+    """A simple made-up picture (sky, building, plate) as JPEG."""
+    w, hgt = 480, 360
+    im = Image.new("RGB", (w, hgt))
+    d = ImageDraw.Draw(im)
+    tones = [((90, 160, 230), (200, 120, 60)), ((240, 200, 150), (120, 70, 40)),
+             ((60, 120, 70), (230, 230, 220)), ((40, 40, 60), (250, 180, 40))][k % 4]
+    for y in range(hgt):
+        t = y / hgt
+        d.line([(0, y), (w, y)], fill=tuple(int(tones[0][i] * (1 - t) + tones[1][i] * t) for i in range(3)))
+    d.ellipse((w * 0.25, hgt * 0.35, w * 0.75, hgt * 0.9), fill=(245, 245, 240), outline=(90, 90, 90), width=4)
+    d.ellipse((w * 0.36, hgt * 0.47, w * 0.64, hgt * 0.78), fill=[(200, 60, 40), (90, 160, 60), (230, 180, 60), (150, 80, 160)][k % 4])
+    d.rectangle((w * 0.05, hgt * 0.1, w * 0.2, hgt * 0.6), fill=(110, 80, 50))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         sys.stderr.write("mock: " + (a[0] % a[1:]) + "\n")
@@ -261,6 +312,20 @@ class H(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         if u.path.endswith("/staticmap"):
             return self.send(200, world_map(q) if (WORLD or REPLAY) else render_map(q), "image/png")
+        if "/photos/" in u.path and u.path.endswith("/media"):
+            k = int(u.path.split("/photos/p")[1].split("/")[0])
+            return self.send(200, {"photoUri": "http://%s/photo/%d.jpg" % (self.headers.get("Host"), k)})
+        if u.path.startswith("/photo/"):
+            return self.send(200, fake_photo(int(u.path[7:].split(".")[0])), "image/jpeg")
+        rich = "reviews" in (self.headers.get("X-Goog-FieldMask") or "")
+        if rich and "/places/" in u.path:
+            pid = urllib.parse.unquote(u.path.rsplit("/", 1)[1])
+            p = (REPLAY.place(pid) if REPLAY else None) or (WORLD.place_json(WORLD.by_id(pid)) if WORLD and WORLD.by_id(pid) else None)
+            if not p:
+                for pp in PLACES:
+                    if "mock-" + pp[0].lower().replace(" ", "-") == pid:
+                        p = place_json(pp)
+            return self.send(200, enrich(p, pid)) if p else self.send(404, {"error": {"message": "not found"}})
         if REPLAY and "/places/" in u.path:
             p = REPLAY.place(urllib.parse.unquote(u.path.rsplit("/", 1)[1]))
             return self.send(200, p) if p else self.send(404, {"error": {"message": "not found"}})
@@ -294,7 +359,10 @@ class H(BaseHTTPRequestHandler):
             if self.path.endswith("places:searchText"):
                 return self.send(200, REPLAY.search())
             if self.path.endswith("places:searchNearby"):
-                return self.send(200, REPLAY.nearby())
+                res = json.loads(json.dumps(REPLAY.nearby()))
+                for pl in res.get("places", []):
+                    pl.setdefault("primaryType", "restaurant")
+                return self.send(200, res)
             if self.path.endswith("places:autocomplete"):
                 return self.send(200, REPLAY.autocomplete())
             if self.path.endswith("computeRoutes"):

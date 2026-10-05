@@ -49,6 +49,8 @@ function get() {
     vibrate: bool(c.vibrate, true),
     allModeTimes: bool(c.allModeTimes, true),
     mapStyle: c.mapStyle || 'light',
+    liveLocation: bool(c.liveLocation, true),
+    showPois: bool(c.showPois, true),
     textSize: (c.textSize === undefined || c.textSize === '' || c.textSize === 'auto') ? 3 : (parseInt(c.textSize, 10) || 0)
   };
 }

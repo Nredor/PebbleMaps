@@ -18,19 +18,23 @@ and Pebble Round 2.
 
 | Screen | Up | Select | Down |
 |---|---|---|---|
-| Map (home) | Favorites | Search by voice | Explore nearby |
+| Map (home) | Map controls | Search by voice | Places & favorites |
 | Results | Previous pin | Open place (hold: list) | Next pin |
-| Place | Save ☆ | Pick travel mode | Go with usual mode |
+| Place | Save ☆ | Pick travel mode | Info (photos, hours, reviews) |
+| Info | Scroll | Next photo (hold: directions) | Scroll |
 | Route | Steps | Start | Switch mode |
-| Navigating | Steps | Menu | Mute buzzing |
+| Navigating | Steps | Menu | Alerts |
 
-Hold Up/Down on the home map to zoom. Press Back twice to stop navigating.
-On Pebble Time 2 you can also tap pins and buttons.
+Your location is live on the map (an arrow while you move); turn on battery saver in
+Settings to show where you were when the map opened. Driving mode (map controls → ⋯ → car)
+turns the map with you. Hold Up/Down on the home map to zoom. Press Back twice to stop
+navigating. On Pebble Time 2 and Round 2 you can also tap pins, places on the map and buttons.
+Pebble Time and Time Round show place info as text (no photos) to save memory.
 
 ## Google services used
 
-Maps Static API (map pictures), Places API (New) (search), Routes API (directions),
-Geocoding API (addresses). Your key is stored only on your phone and sent only to Google.
+Maps Static API (map pictures), Places API (New) (search, places on the map, info and photos),
+Routes API (directions), Geocoding API (addresses), Cloud Text-to-Speech (spoken directions). Your key is stored only on your phone and sent only to Google.
 
 ## Development
 

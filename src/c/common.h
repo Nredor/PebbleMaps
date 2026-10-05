@@ -31,6 +31,9 @@ enum {
   CMD_NAV_VIEW = 22,
   CMD_AUTOCOMPLETE = 23,
   CMD_NAV_VOICE = 24,
+  CMD_INFO = 25,
+  CMD_PHOTO = 26,
+  CMD_HOME_DRIVE = 27,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,
@@ -44,7 +47,16 @@ enum {
   CMD_BUSY = 109,
   CMD_TOAST = 110,
   CMD_VOICE = 111,
+  CMD_INFO_DATA = 112,
 };
+
+// Pebble Time and Time Round: 64 KB for code and a full-color map picture, so a few
+// extras (the photo info page) use a lighter version there
+#if defined(PBL_PLATFORM_BASALT) || defined(PBL_PLATFORM_CHALK)
+#define PM_LOWMEM 1
+#else
+#define PM_LOWMEM 0
+#endif
 
 // Travel modes
 enum { MODE_DRIVE = 0, MODE_WALK = 1, MODE_BIKE = 2, MODE_TRANSIT = 3, MODE_COUNT = 4 };
@@ -54,7 +66,7 @@ enum { MODE_DRIVE = 0, MODE_WALK = 1, MODE_BIKE = 2, MODE_TRANSIT = 3, MODE_COUN
 enum { LIST_RESULTS = 0, LIST_FAVS = 1, LIST_STEPS = 2, LIST_MODES = 3, LIST_RECENTS = 4, LIST_SUGGEST = 5 };
 
 // Destination sources for CMD_SELECT
-enum { SRC_RESULTS = 0, SRC_FAVS = 1, SRC_RECENTS = 2, SRC_SUGGEST = 3 };
+enum { SRC_RESULTS = 0, SRC_FAVS = 1, SRC_RECENTS = 2, SRC_SUGGEST = 3, SRC_POI = 4, SRC_DEST = 5 };
 
 // Error codes
 enum { ERR_NO_KEY = 1, ERR_NO_LOCATION = 2, ERR_API = 3, ERR_NETWORK = 4, ERR_NO_RESULTS = 5 };
@@ -84,7 +96,9 @@ enum { ADJ_ZOOM_IN = 0, ADJ_ZOOM_OUT = 1, ADJ_PAN = 2, ADJ_RESET = 3, ADJ_FIT_RO
 #define NAV_NEAR        (1 << 7)   // close to a maneuver: show the cards
 
 // Marker kinds
-enum { MK_ME = 0, MK_PIN = 1, MK_START = 2, MK_DEST = 3 };
+enum { MK_ME = 0, MK_PIN = 1, MK_START = 2, MK_DEST = 3, MK_ARROW = 4, MK_POI = 5 };
+// Places on the map: kind MK_POI + category
+enum { POI_FOOD = 0, POI_SHOP, POI_NATURE, POI_SIGHTS, POI_STAY, POI_OTHER, POI_CAT_COUNT };
 
 // List item (shared by all list windows). The text lives in the same memory
 // block as the list (see alloc_list), so items are as long as they need to be.

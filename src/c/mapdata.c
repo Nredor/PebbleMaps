@@ -218,8 +218,9 @@ static void op_rotate(int rot) {
   int32_t half = ang / 2;
   int32_t c2 = cos_lookup(half);
   if (c2 == 0) return;
-  int32_t alpha = -(int32_t)(((int64_t)sin_lookup(half) << 16) / c2);   // -tan(rot/2)
-  int32_t beta = (int32_t)(((int64_t)sin_lookup(ang) << 16) / TRIG_MAX_RATIO);  // sin(rot)
+  // 16.16 fixed point, 32-bit math only (|rot/2| <= 45 degrees, so nothing overflows)
+  int32_t alpha = -((int32_t)sin_lookup(half) * 32768 / (c2 / 2));   // -tan(rot/2)
+  int32_t beta = (int32_t)sin_lookup(ang);   // sin(rot)
   op_hshear(alpha);
   op_vshear(beta);
   op_hshear(alpha);
@@ -240,8 +241,8 @@ GPoint map_xform_point(const MapXform *x, GPoint p) {
     int r = norm_deg(x->rot);
     int32_t a = DEG_TO_TRIGANGLE(r < 0 ? r + 360 : r);
     int32_t c = cos_lookup(a), s = sin_lookup(a);
-    int32_t nx = (int32_t)(((int64_t)dx * c - (int64_t)dy * s) / TRIG_MAX_RATIO);
-    int32_t ny = (int32_t)(((int64_t)dx * s + (int64_t)dy * c) / TRIG_MAX_RATIO);
+    int32_t nx = (dx * c - dy * s) / TRIG_MAX_RATIO;
+    int32_t ny = (dx * s + dy * c) / TRIG_MAX_RATIO;
     dx = nx;
     dy = ny;
   }
@@ -402,8 +403,8 @@ static void begin(DictionaryIterator *it) {
           int32_t c = cos_lookup(a), s = sin_lookup(a);
           x.k = k;
           x.rot = norm_deg(g_map.rheading - nh);
-          x.vx = (int)(((int64_t)dx * c + (int64_t)dy * s) / TRIG_MAX_RATIO);
-          x.vy = (int)((-(int64_t)dx * s + (int64_t)dy * c) / TRIG_MAX_RATIO);
+          x.vx = (int)((dx * c + dy * s) / TRIG_MAX_RATIO);
+          x.vy = (int)((-dx * s + dy * c) / TRIG_MAX_RATIO);
           keep = true;
         }
       }
@@ -483,13 +484,13 @@ const Marker *map_marker_for(int index) {
   return NULL;
 }
 
-int map_pin_near(GPoint p, GRect frame, int max_dist) {
+static int near_marker(GPoint p, GRect frame, int max_dist, bool pins) {
   int best = -1, best_d = max_dist * max_dist;
   for (int i = 0; i < g_map.n_markers; i++) {
     const Marker *mk = &g_map.markers[i];
-    if (mk->kind != MK_PIN) continue;
+    if (pins ? mk->kind != MK_PIN : mk->kind < MK_POI) continue;
     int dx = frame.origin.x + mk->x + g_map.shift_x - p.x;
-    int dy = frame.origin.y + mk->y + g_map.shift_y - 10 - p.y;  // pin body sits above the tip
+    int dy = frame.origin.y + mk->y + g_map.shift_y - (pins ? 10 : 0) - p.y;  // pin body sits above the tip
     int d = dx * dx + dy * dy;
     if (d < best_d) {
       best_d = d;
@@ -498,6 +499,9 @@ int map_pin_near(GPoint p, GRect frame, int max_dist) {
   }
   return best;
 }
+
+int map_pin_near(GPoint p, GRect frame, int max_dist) { return near_marker(p, frame, max_dist, true); }
+int map_poi_near(GPoint p, GRect frame, int max_dist) { return near_marker(p, frame, max_dist, false); }
 
 void map_draw(GContext *ctx, GRect frame, int selected) {
   int sx = g_map.shift_x + s_drag_x, sy = g_map.shift_y + s_drag_y;
@@ -514,14 +518,17 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
   } else {
     draw_map_placeholder(ctx, frame);
   }
-  // markers: start/dest/me first, then pins, selected pin last (on top)
-  for (int pass = 0; pass < 3; pass++) {
+  // places first, then start / you, then pins, the selected pin last (on top)
+  for (int pass = 0; pass < 4; pass++) {
     for (int i = 0; i < g_map.n_markers; i++) {
       const Marker *mk = &g_map.markers[i];
       GPoint p = GPoint(frame.origin.x + mk->x + sx, frame.origin.y + mk->y + sy);
       bool is_sel = mk->kind == MK_PIN && mk->index == selected;
-      if (pass == 0 && (mk->kind == MK_START || mk->kind == MK_ME)) {
+      if (pass == 0 && mk->kind >= MK_POI) {
+        draw_poi(ctx, p, mk->kind - MK_POI);
+      } else if (pass == 1 && (mk->kind == MK_START || mk->kind == MK_ME || mk->kind == MK_ARROW)) {
         if (mk->kind == MK_ME) draw_me_dot(ctx, p, 5);
+        else if (mk->kind == MK_ARROW) draw_puck(ctx, p, g_fonts.level >= 1 ? 7 : 6, mk->index * 2);
         else {
           graphics_context_set_fill_color(ctx, GColorWhite);
           graphics_fill_circle(ctx, p, 6);
@@ -530,9 +537,9 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
           graphics_draw_circle(ctx, p, 5);
           graphics_context_set_stroke_width(ctx, 1);
         }
-      } else if (pass == 1 && ((mk->kind == MK_PIN && !is_sel) || mk->kind == MK_DEST)) {
+      } else if (pass == 2 && ((mk->kind == MK_PIN && !is_sel) || mk->kind == MK_DEST)) {
         draw_pin(ctx, p, mk->kind == MK_DEST ? 7 : 5, mk->kind == MK_DEST);
-      } else if (pass == 2 && is_sel) {
+      } else if (pass == 3 && is_sel) {
         draw_pin(ctx, p, 6, true);
       }
     }
