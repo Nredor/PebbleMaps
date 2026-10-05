@@ -29,6 +29,9 @@ function latLngOf(stop) {
   return l ? [l.latitude, l.longitude] : null;
 }
 
+// Google writes times as "2:38\u202fPM"; the watch fonts only have plain spaces
+function spaces(t) { return t.replace(/[\u00a0\u2007\u2009\u202f]/g, ' '); }
+
 function transitInfo(td) {
   if (!td) return null;
   var line = td.transitLine || {};
@@ -45,11 +48,11 @@ function transitInfo(td) {
     stops: td.stopCount || 0,
     from: (stops.departureStop && stops.departureStop.name) || '',
     to: (stops.arrivalStop && stops.arrivalStop.name) || '',
-    departs: (lv.departureTime && lv.departureTime.time && lv.departureTime.time.text) || '',
+    departs: spaces((lv.departureTime && lv.departureTime.time && lv.departureTime.time.text) || ''),
     // for the schedule page: where this ride starts and ends, and when
     fromLoc: latLngOf(stops.departureStop), toLoc: latLngOf(stops.arrivalStop),
     depTime: stops.departureTime || '', vehicleType: veh.type || '', agency: ((line.agencies || [])[0] || {}).name || '',
-    arrives: (lv.arrivalTime && lv.arrivalTime.time && lv.arrivalTime.time.text) || ''
+    arrives: spaces((lv.arrivalTime && lv.arrivalTime.time && lv.arrivalTime.time.text) || '')
   };
 }
 
@@ -126,7 +129,7 @@ function stepList(route, imperial) {
   return route.steps.map(function (s, i) {
     var sub = fmt.distance(s.meters || (s.endDist - s.startDist), imperial);
     if (s.transit) {
-      sub = (s.transit.departs ? s.transit.departs + ' · ' : '') + s.transit.stops + ' stops';
+      sub = (s.transit.departs ? s.transit.departs + ' · ' : '') + s.transit.stops + (s.transit.stops === 1 ? ' stop' : ' stops');
       return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 120), sub: sub, icon: s.man, extra: 1 };
     }
     return { title: fmt.clip(s.instruction.split('\n')[0], 120), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
@@ -305,7 +308,7 @@ Navigator.prototype.update = function (pos, accuracy) {
     man = t.icon;
     text = 'Ride ' + t.line + ' · get off at ' + (t.to || 'your stop');
     say = 'Get off at ' + (t.to || 'your stop');
-    detail = t.stops + ' stops' + (t.arrives ? ' · arrive ' + t.arrives : '');
+    detail = t.stops + (t.stops === 1 ? ' stop' : ' stops') + (t.arrives ? ' · arrive ' + t.arrives : '');
     flags |= P.NAV_FLAG.TRANSIT;
     alertKey = 'exit' + k;
   } else if (k === 0 && snap.s < 25 && step) {

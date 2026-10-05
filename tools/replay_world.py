@@ -139,3 +139,168 @@ class Replay:
         buf = io.BytesIO()
         img.save(buf, "PNG")
         return buf.getvalue()
+
+
+# --- extra demo data (tools/demo_extras.js): places of several kinds, one place's full
+# details and photos, a transit trip and its departures ------------------------------------
+import datetime
+import os
+import re
+
+ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$")
+TZ_NAME = "America/Los_Angeles"
+
+
+def _local(dt):
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.astimezone(ZoneInfo(TZ_NAME))
+    except Exception:
+        return dt
+
+
+def _parse(s):
+    return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _iso(dt):
+    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _dist(a, b):
+    dy = (a[0] - b[0]) * 111320
+    dx = (a[1] - b[1]) * 111320 * math.cos(math.radians(a[0]))
+    return math.hypot(dx, dy)
+
+
+class Extras:
+    KIND_OF = {"restaurant": "restaurant", "cafe": "cafe", "coffee_shop": "cafe", "bar": "bar", "pub": "bar",
+               "wine_bar": "bar"}
+
+    def __init__(self, path, best_photo=0):
+        if os.path.isdir(path):
+            names = []
+            for root, _, files in os.walk(path):
+                names += [os.path.relpath(os.path.join(root, f), path) for f in files]
+            read = lambda n: open(os.path.join(path, n), "rb").read()
+        else:
+            zf = zipfile.ZipFile(path)
+            names = zf.namelist()
+            read = zf.read
+        self.json = {n: json.loads(read(n)) for n in names if n.endswith(".json")}
+        self.photos = {int(n[7:-4]): read(n) for n in names if n.startswith("photos/") and n.endswith(".jpg")}
+        self.meta = self.json["extras_meta.json"]
+        self.home = self.meta["home"]
+        self.captured = _parse(self.meta["capturedAt"][:19] + "Z")
+        self.info = self.json["info.json"]
+        # show the nicest photo first
+        order = sorted(self.photos)
+        if best_photo in order:
+            order.remove(best_photo)
+            order.insert(0, best_photo)
+        self.photo_order = order
+        self.reset_clock()
+
+    def reset_clock(self):
+        """The recorded trip leaves a few minutes from now (fixed until the next reset)."""
+        self.delta = datetime.datetime.now(datetime.timezone.utc) - self.captured
+
+    # times: the recorded trip happens "now"
+    def shift(self, obj):
+        d = self.delta
+
+        def walk(o):
+            if isinstance(o, dict):
+                out = {k: walk(v) for k, v in o.items()}
+                lv = out.get("localizedValues")
+                sd = out.get("stopDetails")
+                if lv and sd:
+                    for k, src in (("departureTime", "departureTime"), ("arrivalTime", "arrivalTime")):
+                        if k in lv and src in sd:
+                            t = _local(_parse(sd[src]))
+                            lv[k]["time"]["text"] = t.strftime("%I:%M\u202f%p").lstrip("0")
+                return out
+            if isinstance(o, list):
+                return [walk(v) for v in o]
+            if isinstance(o, str) and ISO.match(o):
+                return _iso(_parse(o) + d)
+            return o
+        return walk(obj)
+
+    def kind(self, types):
+        for t in types or []:
+            if t in self.KIND_OF:
+                return self.KIND_OF[t]
+        return "tourist_attraction"
+
+    def pois(self, types):
+        return json.loads(json.dumps(self.json.get("pois_%s.json" % self.kind(types), {"places": []})))
+
+    def nearest(self, types, n=10):
+        """Places list: the nearest places that really are of that kind."""
+        k = self.kind(types)
+        want = {"restaurant": r"restaurant|steak_house|diner", "cafe": r"cafe|coffee",
+                "bar": r"bar$|^bar|pub|brew", "tourist_attraction": r"."}[k]
+        ps = [p for p in self.pois(types)["places"] if re.search(want, p.get("primaryType", ""))]
+        seen, out = set(), []
+        for p in sorted(ps, key=lambda p: _dist(self.home, (p["location"]["latitude"], p["location"]["longitude"]))):
+            if p["id"] not in seen:
+                seen.add(p["id"])
+                out.append(p)
+        return {"places": out[:n]}
+
+    def place(self, pid):
+        if pid == self.info["id"]:
+            return self.details()
+        for n, j in self.json.items():
+            if n.startswith("pois_"):
+                for p in j.get("places", []):
+                    if p.get("id") == pid:
+                        return p
+        return None
+
+    def details(self):
+        """The info page place, shown open (it was captured on its day off)."""
+        p = json.loads(json.dumps(self.info))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        loc = _local(now)
+        close = loc.replace(hour=23, minute=30, second=0, microsecond=0)
+        if close < loc:
+            close += datetime.timedelta(days=1)
+        for key in ("currentOpeningHours", "regularOpeningHours"):
+            h = p.get(key)
+            if not h:
+                continue
+            h["openNow"] = True
+            h.pop("nextOpenTime", None)
+            h["nextCloseTime"] = _iso(close)
+            h["weekdayDescriptions"] = [w.replace("Closed", "11:30\u202fAM\u2009\u2013\u200911:30\u202fPM")
+                                        for w in h.get("weekdayDescriptions", [])]
+        p["photos"] = [dict(self.info["photos"][i], name="places/%s/photos/x%d" % (p["id"], k))
+                       for k, i in enumerate(self.photo_order) if i < len(self.info["photos"])]
+        return p
+
+    def photo(self, k):
+        b = self.photos[self.photo_order[k]]
+        if b[:2] != b"\xff\xd8":   # Google sometimes hands out PNGs; the replay sends JPEGs
+            out = io.BytesIO()
+            Image.open(io.BytesIO(b)).convert("RGB").save(out, "JPEG", quality=90)
+            b = out.getvalue()
+        return b
+
+    def transit_route(self):
+        return self.shift(self.json["route_TRANSIT_full.json"])
+
+    def departures(self, when):
+        """The recorded departure lookup that starts at the asked time."""
+        t = _parse(when)
+        rounds = sorted(n for n in self.json if n.startswith("transit_deps_"))
+        best = None
+        for n in rounds:
+            j = self.shift(self.json[n])
+            times = [s["transitDetails"]["stopDetails"]["departureTime"] for r in j.get("routes", [])
+                     for l in r.get("legs", []) for s in l.get("steps", []) if s.get("transitDetails")]
+            if times and _parse(min(times)) >= t - datetime.timedelta(seconds=90):
+                return j
+            best = j
+        return {"routes": []} if best is None else {"routes": []}

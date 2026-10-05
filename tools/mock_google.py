@@ -35,6 +35,11 @@ if _arg("--replay"):
     import replay_world
     REPLAY = replay_world.Replay(_arg("--replay"))
     sys.stderr.write("Replay: %d map pictures, home %s\n" % (len(REPLAY.tiles), REPLAY.home))
+EXTRAS = None
+if _arg("--extras"):
+    # more demo data: places of several kinds, one place's details and photos, a transit trip
+    EXTRAS = replay_world.Extras(_arg("--extras"), int(_arg("--best-photo", "0")))
+    sys.stderr.write("Extras: %d photos\n" % len(EXTRAS.photos))
 if _arg("--osm"):
     sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
     import osm_world
@@ -337,14 +342,27 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
+        if EXTRAS and u.path == "/__clock":   # test hook: the recorded transit trip starts over from now
+            EXTRAS.reset_clock()
+            return self.send(200, {"ok": True})
         if u.path.endswith("/staticmap"):
             return self.send(200, world_map(q) if (WORLD or REPLAY) else render_map(q), "image/png")
+        if EXTRAS and "/photos/x" in u.path and u.path.endswith("/media"):
+            k = int(u.path.split("/photos/x")[1].split("/")[0])
+            return self.send(200, {"photoUri": "http://%s/xphoto/%d.jpg" % (self.headers.get("Host"), k)})
+        if EXTRAS and u.path.startswith("/xphoto/"):
+            return self.send(200, EXTRAS.photo(int(u.path[8:].split(".")[0])), "image/jpeg")
         if "/photos/" in u.path and u.path.endswith("/media"):
             k = int(u.path.split("/photos/p")[1].split("/")[0])
             return self.send(200, {"photoUri": "http://%s/photo/%d.jpg" % (self.headers.get("Host"), k)})
         if u.path.startswith("/photo/"):
             return self.send(200, fake_photo(int(u.path[7:].split(".")[0])), "image/jpeg")
         rich = "reviews" in (self.headers.get("X-Goog-FieldMask") or "")
+        if EXTRAS and "/places/" in u.path:
+            pid = urllib.parse.unquote(u.path.rsplit("/", 1)[1])
+            p = EXTRAS.place(pid)
+            if p:
+                return self.send(200, p if (pid == EXTRAS.info["id"] or not rich) else enrich(p, pid))
         if rich and "/places/" in u.path:
             pid = urllib.parse.unquote(u.path.rsplit("/", 1)[1])
             p = (REPLAY.place(pid) if REPLAY else None) or (WORLD.place_json(WORLD.by_id(pid)) if WORLD and WORLD.by_id(pid) else None)
@@ -382,6 +400,22 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
+        mask = self.headers.get("X-Goog-FieldMask") or ""
+        if EXTRAS:
+            if self.path.endswith("places:searchNearby"):
+                types = body.get("includedTypes", [])
+                if "places.primaryType," in mask + ",":
+                    return self.send(200, EXTRAS.pois(types))    # places on the map
+                return self.send(200, EXTRAS.nearest(types))      # Places list
+            if self.path.endswith("places:searchText"):
+                if body.get("includedType"):
+                    return self.send(200, EXTRAS.pois([body["includedType"]]))   # open places on the map
+                if "pink" in body.get("textQuery", "").lower():
+                    return self.send(200, {"places": [EXTRAS.info]})
+            if self.path.endswith("computeRoutes") and body.get("travelMode") == "TRANSIT" and "legs" in mask:
+                if "polyline" in mask:
+                    return self.send(200, EXTRAS.transit_route())
+                return self.send(200, EXTRAS.departures(body.get("departureTime")))
         if REPLAY:
             if self.path.endswith("places:searchText"):
                 return self.send(200, REPLAY.search())

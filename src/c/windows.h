@@ -55,3 +55,4 @@ ListItem *alloc_list(const char *packed, int max, int *count);
 void results_window_close(void);
 void place_window_close(void);
 void list_windows_close_all(void);
+void list_windows_trim(void);

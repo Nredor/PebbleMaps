@@ -523,7 +523,9 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
       break;
     case LW_STEPS:
       if (lw->count && lw->items[i->row].extra) {
-        text_page_push(ICON_BUS, lw->items[i->row].title, CMD_TRANSIT_INFO, i->row);
+        uint8_t v = lw->items[i->row].icon;   // the ride's vehicle
+        text_page_push(v == MAN_FERRY ? ICON_FERRY : (v == MAN_BUS ? ICON_BUS : ICON_TRAIN),
+                       lw->items[i->row].title, CMD_TRANSIT_INFO, i->row);
       }
       break;
     case LW_SETMODE:
@@ -649,16 +651,18 @@ void list_windows_close_all(void) {
   }
 }
 
-void list_window_push(ListKind kind, int arg) {
-  // short on memory (Pebble Time, Time Round): drop the lists underneath first
-  if (heap_bytes_free() < 4000) {
-    Window *top = window_stack_get_top_window();
-    for (ListWin *o = s_all, *nx; o; o = nx) {
-      nx = o->next;
-      if (o->window != top) window_stack_remove(o->window, false);
-    }
-    results_window_close();
+// Short on memory (Pebble Time, Time Round): drop the lists underneath the top window
+void list_windows_trim(void) {
+  Window *top = window_stack_get_top_window();
+  for (ListWin *o = s_all, *nx; o; o = nx) {
+    nx = o->next;
+    if (o->window != top) window_stack_remove(o->window, false);
   }
+  results_window_close();
+}
+
+void list_window_push(ListKind kind, int arg) {
+  if (heap_bytes_free() < 4000) list_windows_trim();
   ListWin *lw = calloc(1, sizeof(ListWin));
   if (!lw) return;
   lw->kind = kind;

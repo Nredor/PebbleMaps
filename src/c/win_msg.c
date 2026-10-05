@@ -78,8 +78,8 @@ static void window_load(Window *window) {
   GRect b = layer_get_bounds(root);
   mw->scroll = scroll_layer_create(b);
   scroll_layer_set_click_config_onto_window(mw->scroll, window);
-#ifdef PBL_ROUND
-  scroll_layer_set_paging(mw->scroll, true);
+#if defined(PBL_ROUND) && !TOUCH_HW
+  scroll_layer_set_paging(mw->scroll, true);   // Time Round: a page at a time (Round 2's bigger screen scrolls in steps)
 #endif
   mw->icon_layer = layer_create_with_data(GRect(b.size.w / 2 - 22, PBL_IF_ROUND_ELSE(14, 8), 44, 44), sizeof(MsgWin *));
   *(MsgWin **)layer_get_data(mw->icon_layer) = mw;
@@ -130,8 +130,13 @@ static MsgWin *msg_create(IconId icon, const char *title, const char *body) {
   return mw;
 }
 
-static void msg_show(MsgWin *mw) {
+static bool msg_show(MsgWin *mw) {
   mw->window = window_create();
+  if (!mw->window) {   // out of memory: give up quietly
+    free(mw->body_text);
+    free(mw);
+    return false;
+  }
   window_set_user_data(mw->window, mw);
   window_set_background_color(mw->window, C_BG);
   window_set_window_handlers(mw->window, (WindowHandlers){
@@ -139,6 +144,7 @@ static void msg_show(MsgWin *mw) {
     .disappear = window_disappear, .unload = window_unload,
   });
   window_stack_push(mw->window, true);
+  return true;
 }
 
 void msg_window_push(IconId icon, const char *title, const char *body, bool pop_on_configured) {
@@ -146,16 +152,18 @@ void msg_window_push(IconId icon, const char *title, const char *body, bool pop_
   MsgWin *mw = msg_create(icon, title, body);
   if (!mw) return;
   mw->pop_on_configured = pop_on_configured;
+  if (!msg_show(mw)) return;
   if (pop_on_configured) s_setup = mw;
-  msg_show(mw);
 }
 
 // A page whose text comes from the phone (transit schedules; place info on Pebble Time / Time Round)
 static void remote_page(IconId icon, const char *title, int cmd, int idx, int mode) {
+  if (heap_bytes_free() < 6000) list_windows_trim();   // Pebble Time / Time Round
+  if (heap_bytes_free() < 4000) list_windows_close_all();   // the list this page opened from too
   MsgWin *mw = msg_create(icon, title ? title : "", "Loading...");
   if (!mw) return;
   mw->info = true;
-  msg_show(mw);
+  if (!msg_show(mw)) return;
   OutMsg m;
   comm_msg_init(&m, cmd);
   m.idx = idx;
