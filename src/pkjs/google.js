@@ -268,17 +268,12 @@ function placeDetails(placeId, token, cb) {
 }
 
 // --- Places shown on the map, and the "more info" page ---------------------------
-// The kinds of places Google Maps shows on its map
-var POI_TYPES = ['restaurant', 'cafe', 'coffee_shop', 'bar', 'bakery', 'fast_food_restaurant', 'ice_cream_shop',
-  'tourist_attraction', 'museum', 'art_gallery', 'park', 'shopping_mall', 'clothing_store', 'book_store',
-  'supermarket', 'grocery_store', 'pharmacy', 'movie_theater', 'library', 'hotel', 'performing_arts_theater'];
-
-// Popular places around a spot (for the map). cb(err, [place + primaryType])
-function searchPois(loc, radius, cb) {
+// Places of one kind around a spot (for the map). cb(err, [place + primaryType])
+function searchPois(loc, radius, cat, cb) {
   var body = {
-    includedTypes: POI_TYPES,
+    includedTypes: cat.types,
     maxResultCount: 20,
-    rankPreference: 'POPULARITY',
+    rankPreference: cat.rank || 'POPULARITY',
     languageCode: config.language,
     locationRestriction: { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: radius } }
   };

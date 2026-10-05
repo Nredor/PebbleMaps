@@ -16,10 +16,6 @@ static bool s_hello_sent;
 static AppTimer *s_hello_timer;
 static int s_hello_tries;
 static char s_status[64] = "Connecting to phone";
-// Places on the map: off, dots, or dots with names (button in the map controls)
-enum { POIS_OFF = 0, POIS_DOTS, POIS_NAMES };
-static int s_pois = POIS_DOTS;
-#define PERSIST_POIS 6
 
 Window *home_window_get(void) { return s_window; }
 
@@ -51,8 +47,9 @@ static void send_hello(void) {
 
 // restore = keep the last view the user moved to (when coming back to this screen)
 static void request_map(bool restore) {
+  poi_prefs_send();   // which places to draw
   GRect f = map_frame(layer_get_bounds(window_get_root_layer(s_window)));
-  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, (restore ? 1 : 0) | (s_pois << 2));
+  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, restore ? 1 : 0);
   s_map_requested = true;
   strncpy(s_status, "Finding you", sizeof(s_status));
   dots_layer_set_running(s_dots, true);
@@ -249,29 +246,13 @@ static void start_search(void) {
 }
 
 // --- Map controls ------------------------------------------------------------
-static IconId pois_icon(void) {
-  return s_pois == POIS_OFF ? ICON_POI_OFF : (s_pois == POIS_DOTS ? ICON_POI_DOTS : ICON_POI_NAMES);
-}
-
-// Places on the map: dots -> names -> off -> dots ...
-static void cycle_pois(void) {
-  s_pois = PM_LOWMEM ? (s_pois == POIS_OFF ? POIS_DOTS : POIS_OFF) : (s_pois + 1) % 3;   // names need more memory
-  persist_write_int(PERSIST_POIS, s_pois);
-  s_bar.extra_down = pois_icon();
-  OutMsg m;
-  comm_msg_init(&m, CMD_POI_MODE);
-  m.idx = s_pois;
-  m.seq = g_map.seq;
-  comm_send(&m);
-  ui_toast(s_window, s_pois == POIS_OFF ? "Places: off" : (s_pois == POIS_DOTS ? "Places: dots" : "Places: names"));
-  layer_mark_dirty(s_canvas);
-}
-
 static void bar_cb(MapBarEvent ev, void *ctx) {
   if (ev == MB_EV_EXTRA_UP) {
     map_adjust(ADJ_RESET, 0, 0);
   } else if (ev == MB_EV_EXTRA_DOWN) {
-    cycle_pois();
+    // places on the map: which kinds, names, on/off
+    mapbar_close(&s_bar);
+    list_window_push(LW_MAPPLACES, 0);
   }
   layer_mark_dirty(s_canvas);
 }
@@ -356,8 +337,7 @@ static void window_load(Window *window) {
   s_dots = dots_layer_create(GRect(0, mf.size.h / 2 - 20, mf.size.w, 40));
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
-  if (persist_exists(PERSIST_POIS)) s_pois = clampi(persist_read_int(PERSIST_POIS), 0, 2);
-  mapbar_init(&s_bar, s_canvas, mf.size, ICON_MYLOC, pois_icon(), bar_cb, NULL);
+  mapbar_init(&s_bar, s_canvas, mf.size, ICON_MYLOC, ICON_POI_NAMES, bar_cb, NULL);
   s_bar.extra_up_color = C_BLUE;
   s_bar.extra_down_color = C_ICON;
   maptouch_init(&s_touch, mf, map_tap, NULL, &s_bar);

@@ -433,39 +433,14 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 4, 20, 36, 20);
       graphics_draw_arc(ctx, GRect(P(12, 3).x, P(12, 3).y, S(16), S(34)), GOvalScaleModeFitCircle, 0, TRIG_MAX_ANGLE);
       break;
-    case ICON_POI_OFF:
-      // a grey place dot, crossed out
-      graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
-      circle(ctx, 20, 20, 13, true);
-      graphics_context_set_stroke_width(ctx, sw);
-      circle(ctx, 20, 20, 13, false);
-      line(ctx, 7, 33, 33, 7);
-      break;
-    case ICON_POI_DOTS: {
-      // a place dot with rainbow stripes
-#ifdef PBL_COLOR
-      static const uint8_t bands[6] = { GColorRedARGB8, GColorOrangeARGB8, GColorYellowARGB8,
-                                        GColorGreenARGB8, GColorBlueMoonARGB8, GColorPurpleARGB8 };
-#endif
-      GPoint c0 = P(20, 20);
-      int R = S(14);
-      graphics_context_set_stroke_width(ctx, 1);
-      for (int dy = -R; dy <= R; dy++) {
-        int hw = 0;
-        while ((hw + 1) * (hw + 1) + dy * dy <= R * R) hw++;
-        int band = (dy + R) * 6 / (2 * R + 1);
-#ifdef PBL_COLOR
-        graphics_context_set_stroke_color(ctx, (GColor){ .argb = bands[band] });
-#else
-        graphics_context_set_stroke_color(ctx, (band & 1) ? GColorWhite : GColorBlack);
-#endif
-        graphics_draw_line(ctx, GPoint(c0.x - hw, c0.y + dy), GPoint(c0.x + hw, c0.y + dy));
-      }
-      graphics_context_set_stroke_color(ctx, fg);
-      graphics_draw_circle(ctx, c0, R);
+    case ICON_BAR: {
+      // a cocktail glass
+      static const int8_t cup[] = {6, 6, 34, 6, 20, 22};
+      poly(ctx, cup, 3, true);
+      rect(ctx, 18, 20, 22, 33, 0);
+      rect(ctx, 11, 32, 29, 36, 1);
       break;
     }
-#if !PM_LOWMEM
     case ICON_POI_NAMES: {
       // a tiny name pill: dot + "A"
       GPoint a = P(1, 9), b = P(39, 31);
@@ -483,7 +458,6 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
                          GTextOverflowModeFill, GTextAlignmentCenter, NULL);
       break;
     }
-#endif
     case ICON_VOL_DOWN: {
       static const int8_t spk2[] = {2, 14, 9, 14, 18, 6, 18, 34, 9, 26, 2, 26};
       poly(ctx, spk2, 6, true);
@@ -802,18 +776,7 @@ void draw_puck(GContext *ctx, GPoint c, int r, int heading_deg) {
 }
 
 GColor poi_color(int cat) {
-#ifdef PBL_COLOR
-  switch (cat) {
-    case POI_FOOD: return GColorOrange;
-    case POI_SHOP: return GColorCobaltBlue;
-    case POI_NATURE: return GColorIslamicGreen;
-    case POI_SIGHTS: return GColorTiffanyBlue;
-    case POI_STAY: return GColorPurple;
-    default: return GColorDarkGray;
-  }
-#else
-  return GColorBlack;
-#endif
+  return map_cat_color(cat);
 }
 
 void draw_poi(GContext *ctx, GPoint c, int cat) {

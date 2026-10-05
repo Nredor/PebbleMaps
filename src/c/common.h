@@ -98,7 +98,9 @@ enum { ADJ_ZOOM_IN = 0, ADJ_ZOOM_OUT = 1, ADJ_PAN = 2, ADJ_RESET = 3, ADJ_FIT_RO
 // Marker kinds
 enum { MK_ME = 0, MK_PIN = 1, MK_START = 2, MK_DEST = 3, MK_ARROW = 4, MK_POI = 5 };
 // Places on the map: kind MK_POI + category
-enum { POI_FOOD = 0, POI_SHOP, POI_NATURE, POI_SIGHTS, POI_STAY, POI_OTHER, POI_CAT_COUNT };
+// Place kinds on the map: the Places menu's 12 categories, then Bars and Other
+#define MAP_CAT_COUNT 14
+#define MAP_CAT_OTHER 13
 
 // List item (shared by all list windows). The text lives in the same memory
 // block as the list (see alloc_list), so items are as long as they need to be.
@@ -119,6 +121,9 @@ typedef struct {
   bool has_mic;
   bool touch;
   bool dark_map;       // dark map colors (color watches)
+  bool pois_on;        // places drawn on the main map
+  bool poi_names;      // ...with their names
+  uint16_t poi_mask;   // which kinds of places (bit per MAP_CAT)
   uint16_t inbox_size;
 } AppState;
 

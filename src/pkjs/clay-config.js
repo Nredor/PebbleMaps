@@ -150,7 +150,8 @@ function config() {
             'It goes back to normal after 5 seconds. On Pebble Time 2, drag the map with your finger, ' +
             'double-tap to zoom in, or press and hold to zoom out.<br><br>' +
             '<strong>Places on the map:</strong> open the map controls (Up) and press Select (⋯) until the last page. ' +
-            'The bottom button switches places between dots, dots with names, and off. ' +
+            'The bottom button opens Places on map: turn places and their names on or off, and pick which kinds ' +
+            '(restaurants, coffee, ATMs...). ' +
             'On Pebble Time 2 and Round 2, tap a place for photos, hours and reviews.<br><br>' +
             '<strong>Place info:</strong> on a place, press Down (<strong>i</strong>) for photos, hours and reviews. ' +
             'Select shows the next photo; hold Select for directions.<br><br>' +

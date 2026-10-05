@@ -25,6 +25,49 @@ const uint8_t CATEGORY_COLORS[CATEGORY_COUNT] = {
 const uint8_t CATEGORY_COLORS[CATEGORY_COUNT] = { 0 };
 #endif
 
+const char *map_cat_name(int cat) {
+  if (cat < CATEGORY_COUNT) return CATEGORY_NAMES[cat];
+  return cat == 12 ? "Bars" : "Other places";
+}
+IconId map_cat_icon(int cat) {
+  if (cat < CATEGORY_COUNT) return CATEGORY_ICONS[cat];
+  return cat == 12 ? ICON_BAR : ICON_PIN;
+}
+GColor map_cat_color(int cat) {
+#ifdef PBL_COLOR
+  if (cat < CATEGORY_COUNT) return (GColor){ .argb = CATEGORY_COLORS[cat] };
+  return cat == 12 ? GColorFashionMagenta : GColorDarkGray;
+#else
+  return GColorBlack;
+#endif
+}
+
+// --- Places on the main map: on/off, names, which kinds (kept on the watch) ------
+#define PERSIST_POI_PREFS 7
+void poi_prefs_load(void) {
+  g_app.pois_on = true;
+  g_app.poi_names = !PM_LOWMEM;
+  g_app.poi_mask = (1 << 0) | (1 << 1) | (1 << 4) | (1 << MAP_CAT_OTHER);   // restaurants, coffee, parks, other
+  if (persist_exists(PERSIST_POI_PREFS)) {
+    int v = persist_read_int(PERSIST_POI_PREFS);
+    g_app.pois_on = v & 1;
+    g_app.poi_names = (v & 2) && !PM_LOWMEM;
+    g_app.poi_mask = (v >> 2) & 0xFFFF;
+  }
+}
+void poi_prefs_send(void) {
+  OutMsg m;
+  comm_msg_init(&m, CMD_POI_MODE);
+  m.idx = (g_app.pois_on ? 1 : 0) | (g_app.poi_names ? 2 : 0);
+  m.num = g_app.poi_mask;
+  m.seq = g_map.seq;
+  comm_send(&m);
+}
+void poi_prefs_save(void) {
+  persist_write_int(PERSIST_POI_PREFS, (g_app.pois_on ? 1 : 0) | (g_app.poi_names ? 2 : 0) | (g_app.poi_mask << 2));
+  poi_prefs_send();
+}
+
 const char *mode_name(int mode) {
   switch (mode) {
     case MODE_WALK: return "Walk";
@@ -95,6 +138,7 @@ static void init(void) {
   g_app.touch = touch_service_is_enabled();
   if (g_app.touch) app_touch_navigation_enable(true);
   comm_init();
+  poi_prefs_load();
   map_reserve();
   home_window_push();
 }

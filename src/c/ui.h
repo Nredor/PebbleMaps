@@ -33,7 +33,7 @@ typedef enum {
   ICON_SOUND, ICON_CLOSE, ICON_ZOOM_IN, ICON_ZOOM_OUT, ICON_MAP,
   ICON_KEY, ICON_MOVE, ICON_MORE, ICON_UP, ICON_DOWN, ICON_LEFT, ICON_RIGHT,
   ICON_EYE, ICON_EYE_OFF, ICON_STOP, ICON_NORTH, ICON_HEADING, ICON_TRIANGLE, ICON_VIBRATE, ICON_VOL_UP, ICON_VOL_DOWN,
-  ICON_INFO, ICON_GLOBE, ICON_POI_OFF, ICON_POI_DOTS, ICON_POI_NAMES, ICON_COUNT
+  ICON_INFO, ICON_GLOBE, ICON_POI_NAMES, ICON_BAR, ICON_COUNT
 } IconId;
 
 // Fonts, chosen by the text-size setting (level 0 = standard, 1 = large, 2 = extra large)
@@ -70,6 +70,10 @@ void draw_poi(GContext *ctx, GPoint c, int category);
 GRect poi_label_rect(GPoint c, const char *name, bool left);
 void draw_poi_label(GContext *ctx, GPoint c, int category, const char *name, GRect pill);
 GColor poi_color(int category);
+// Place kinds on the map (MAP_CAT_*): name, icon, color
+const char *map_cat_name(int cat);
+IconId map_cat_icon(int cat);
+GColor map_cat_color(int cat);
 // Small compass: the red tip points north on a map turned so map_heading is up
 void draw_compass(GContext *ctx, GPoint c, int map_heading);
 

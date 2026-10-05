@@ -552,7 +552,7 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
   // places first (names as pills, skipping any that would cover another), then start / you,
   // then pins, the selected pin last (on top)
 #if !PM_LOWMEM
-  GRect used[9];
+  GRect used[17];
   int n_used = 0;
   // keep names off your own dot / arrow
   for (int i = 0; i < g_map.n_markers && !n_used; i++) {
@@ -575,7 +575,7 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
       clash = r.origin.x < used[j].origin.x + used[j].size.w + 2 && used[j].origin.x < r.origin.x + r.size.w + 2 &&
               r.origin.y < used[j].origin.y + used[j].size.h + 1 && used[j].origin.y < r.origin.y + r.size.h + 1;
     }
-    if (clash || n_used == 9) continue;
+    if (clash || n_used == 17) continue;
     used[n_used++] = r;
   }
 #endif
@@ -598,7 +598,8 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
           if (labeled) draw_poi_label(ctx, p, mk->kind - MK_POI, g_map.names + mk->name, r);
         }
 #endif
-        if (!labeled) draw_poi(ctx, p, mk->kind - MK_POI);
+        // with names on, every place shown has its name: no room for the name, no dot
+        if (!labeled && !(mk->name >= 0 && g_map.names)) draw_poi(ctx, p, mk->kind - MK_POI);
       } else if (pass == 1 && (mk->kind == MK_START || mk->kind == MK_ME || mk->kind == MK_ARROW)) {
         if (mk->kind == MK_ME) draw_me_dot(ctx, p, 5);
         else if (mk->kind == MK_ARROW) draw_puck(ctx, p, g_fonts.level >= 1 ? 7 : 6, mk->index * 2);

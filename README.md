@@ -27,7 +27,7 @@ and Pebble Round 2.
 
 Your location is live on the map (an arrow while you move); turn off Live location in
 Settings to save battery. Driving mode (Settings) turns the map with you. Map controls → ⋯ →
-the last page's bottom button switches places on the map between dots, names and off. Hold Up/Down on the home map to zoom. Press Back twice to stop
+the last page's bottom button picks which places show on the map (and their names). Hold Up/Down on the home map to zoom. Press Back twice to stop
 navigating. On Pebble Time 2 and Round 2 you can also tap pins, places on the map and buttons.
 Pebble Time and Time Round show place info as text (no photos) and places as dots only, to save memory.
 

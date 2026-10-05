@@ -13,7 +13,11 @@ void results_window_push_search(const char *query);
 void results_window_push_nearby(int category);
 
 // Generic lists
-typedef enum { LW_FAVS, LW_CATEGORIES, LW_MODES, LW_STEPS, LW_SETMODE } ListKind;
+typedef enum { LW_FAVS, LW_CATEGORIES, LW_MODES, LW_STEPS, LW_SETMODE, LW_MAPPLACES } ListKind;
+// Places on the main map: preferences (see main.c)
+void poi_prefs_load(void);
+void poi_prefs_save(void);   // also tells the phone
+void poi_prefs_send(void);
 void list_window_push(ListKind kind, int arg);
 
 // Place card

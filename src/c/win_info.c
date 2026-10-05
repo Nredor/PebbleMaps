@@ -40,16 +40,6 @@ static int header_h(GRect b) {
   return s_photos ? b.size.h * PBL_IF_ROUND_ELSE(50, 44) / 100 : PBL_IF_ROUND_ELSE(70, 46);
 }
 
-static IconId cat_icon(int cat) {
-  switch (cat) {
-    case POI_FOOD: return ICON_FOOD;
-    case POI_SHOP: return ICON_CART;
-    case POI_NATURE: return ICON_TREE;
-    case POI_SIGHTS: return ICON_FLAG;
-    case POI_STAY: return ICON_BED;
-    default: return ICON_PIN;
-  }
-}
 
 // Text block: measured always, drawn when ctx is set. Returns its height.
 static int put(GContext *ctx, const char *t, GFont f, GColor c, int x, int y, int w) {
@@ -94,7 +84,7 @@ static void draw_header(GContext *ctx, int w, int h) {
   if (!s_photos) {
     graphics_context_set_fill_color(ctx, s_loaded ? poi_color(s_cat) : C_DIVIDER);
     graphics_fill_rect(ctx, GRect(0, 0, w, h), 0, GCornerNone);
-    if (s_loaded) icon_draw(ctx, cat_icon(s_cat), GPoint(w / 2, h / 2 + PBL_IF_ROUND_ELSE(6, 0)), 26, GColorWhite, poi_color(s_cat));
+    if (s_loaded) icon_draw(ctx, map_cat_icon(s_cat), GPoint(w / 2, h / 2 + PBL_IF_ROUND_ELSE(6, 0)), 26, GColorWhite, poi_color(s_cat));
     return;
   }
   if (g_map.bmp && g_map.seq == s_photo_seq) {
@@ -251,7 +241,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       s_rcount = tuple_int(it, MESSAGE_KEY_num2, 0);
       s_flags = tuple_int(it, MESSAGE_KEY_flags, 0);
       s_photos = tuple_int(it, MESSAGE_KEY_idx, 0);
-      s_cat = tuple_int(it, MESSAGE_KEY_mode, POI_OTHER);
+      s_cat = tuple_int(it, MESSAGE_KEY_mode, MAP_CAT_OTHER);
       free(s_items);
       s_items = alloc_list(tuple_str(it, MESSAGE_KEY_list), MAX_INFO_ITEMS, &s_nitems);
       s_loaded = true;
@@ -382,7 +372,7 @@ void info_window_push(int src, int idx, const char *title) {
   s_idx = idx;
   s_loaded = false;
   s_photos = s_photo = s_rating = s_rcount = s_flags = 0;
-  s_cat = POI_OTHER;
+  s_cat = MAP_CAT_OTHER;
   s_photo_seq = -1;
   strncpy(s_name, title ? title : "", sizeof(s_name) - 1);
   s_name[sizeof(s_name) - 1] = 0;

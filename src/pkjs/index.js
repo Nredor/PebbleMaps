@@ -532,7 +532,6 @@ function onHomeMap(p) {
   var zoom = p.idx > 0 ? p.idx : 15;
   var restore = ((p.mode || 0) & 1) === 1;
   homeDrive = !!S.driveMode;
-  poiMode = ((p.mode || 0) >> 2) & 3;
   setMapVisible(true);
   getLocation(20000, function (err, loc) {
     if (err) return sendError(err);
@@ -659,14 +658,34 @@ function liveUpdate() {
 }
 
 // --- Places on the map ---------------------------------------------------------
+// Kinds of places on the map: the Places menu's categories, then Bars and Other (same order as the watch)
+var MAP_CATS = P.CATEGORIES.concat([
+  { name: 'Bars', types: ['bar', 'pub', 'wine_bar'], rank: 'POPULARITY' },
+  { name: 'Other places', types: ['tourist_attraction', 'museum', 'art_gallery', 'shopping_mall', 'clothing_store',
+    'book_store', 'movie_theater', 'performing_arts_theater', 'bakery', 'ice_cream_shop'], rank: 'POPULARITY' }
+]);
+var CAT_OTHER = MAP_CATS.length - 1;
+
+// Which kind a Google place type belongs to
 function poiCategory(t) {
   t = t || '';
-  if (/hotel|lodging|motel|inn$|hostel|resort|bed_and_breakfast/.test(t)) return 4;
-  if (/restaurant|food|meal|cafe|coffee|^bar$|_bar$|pub|bakery|ice_cream|dessert|tea|juice|diner|pizza|sandwich|steak|brunch/.test(t)) return 0;
-  if (/park|garden|beach|hiking|nature|campground|zoo|playground/.test(t)) return 2;
-  if (/museum|gallery|attraction|theater|theatre|library|landmark|monument|church|stadium|aquarium|cinema|movie/.test(t)) return 3;
-  if (/store|shop|mall|market|supermarket|grocery|boutique|pharmacy|drugstore/.test(t)) return 1;
-  return 5;
+  if (/cafe|coffee|tea_house/.test(t)) return 1;
+  if (/^bar$|_bar$|pub|night_club|brewery|winery/.test(t)) return 12;
+  if (/restaurant|food|meal|diner|pizza|sandwich|steak|brunch|deli/.test(t)) return 0;
+  for (var i = 0; i < MAP_CATS.length - 1; i++) {
+    if (MAP_CATS[i].types.indexOf(t) >= 0) return i;
+  }
+  if (/hotel|lodging|motel|hostel|inn$|resort/.test(t)) return 5;
+  if (/park|garden|playground/.test(t)) return 4;
+  return CAT_OTHER;
+}
+
+var poiMask = (1 << 0) | (1 << 1) | (1 << 4) | (1 << CAT_OTHER);   // the watch sends its choice
+
+function enabledCats() {
+  var out = [];
+  for (var i = 0; i < MAP_CATS.length; i++) if ((poiMask >> i) & 1) out.push(i);
+  return out;
 }
 
 var POI_CELL = 512;   // map pixels per lookup area (about one Google map picture)
@@ -677,18 +696,30 @@ function poiCell(v, dx, dy) {
   return [z, Math.floor(c[0] / POI_CELL) + (dx || 0), Math.floor(c[1] / POI_CELL) + (dy || 0)];
 }
 
-// Gather the places near this view from what we've already looked up
+// Gather the places near this view from what we've already looked up, taking turns
+// between the kinds so each one shows up
 function rebuildPois(v) {
-  var seen = {}, out = [];
-  for (var dy = -1; dy <= 1; dy++) {
-    for (var dx = -1; dx <= 1; dx++) {
-      var list = poiCache[poiCell(v, dx, dy).join(':')] || [];
-      list.forEach(function (pl) {
-        if (seen[pl.placeId] || out.length >= 60) return;
-        seen[pl.placeId] = true;
-        out.push(pl);
-      });
+  var lists = enabledCats().map(function (cat) {
+    var l = [];
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        (poiCache[poiCell(v, dx, dy).join(':') + ':' + cat] || []).forEach(function (pl) { l.push(pl); });
+      }
     }
+    return l;
+  });
+  var seen = {}, out = [];
+  for (var k = 0; out.length < 80; k++) {
+    var any = false;
+    lists.forEach(function (l) {
+      var pl = l[k];
+      if (!pl) return;
+      any = true;
+      if (seen[pl.placeId] || out.length >= 80) return;
+      seen[pl.placeId] = true;
+      out.push(pl);
+    });
+    if (!any) break;
   }
   pois = out;
 }
@@ -697,29 +728,30 @@ function maybeFetchPois(v) {
   if (!placesShown() || v.zoom < 15 || !google.hasKey()) return;
   rebuildPois(v);
   var cell = poiCell(v);
-  var key = cell.join(':');
-  if (poiCache[key] || poiState.busy || Date.now() < poiState.failUntil) return;
+  var base = cell.join(':');
+  var cat = enabledCats().filter(function (c) { return !poiCache[base + ':' + c]; })[0];
+  if (cat === undefined || poiState.busy || Date.now() < poiState.failUntil) return;
   poiState.busy = true;
   var z = cell[0];
   var center = geo.unproject((cell[1] + 0.5) * POI_CELL, (cell[2] + 0.5) * POI_CELL, z);
   var mpp = 156543.03 * Math.cos(geo.rad(center[0])) / Math.pow(2, z);
   var radius = Math.max(150, Math.min(3000, mpp * POI_CELL * 0.72));
-  google.searchPois(center, radius, function (err, list) {
+  google.searchPois(center, radius, MAP_CATS[cat], function (err, list) {
     poiState.busy = false;
     if (err) {
       console.log('places on map: ' + (err.text || err.title));
       poiState.failUntil = Date.now() + 60000;
       return;
     }
-    list.forEach(function (pl) { pl.cat = poiCategory(pl.primaryType); });
-    poiCache[key] = list;
+    list.forEach(function (pl) { pl.cat = cat; });
+    poiCache[base + ':' + cat] = list;
     var keys = Object.keys(poiCache);
-    if (keys.length > 40) delete poiCache[keys[0]];
+    if (keys.length > 150) delete poiCache[keys[0]];
     var st = views.home;
     if (st && lastKind === 'home' && mapVisible) {
       rebuildPois(st.view);
       sendMarkers(st);
-      maybeFetchPois(st.view);   // the area you're looking at may have moved meanwhile
+      maybeFetchPois(st.view);   // the next kind, or the area you're looking at now
     }
   });
 }
@@ -1552,7 +1584,8 @@ function onMessage(e) {
       case CMD.INFO: onInfo(p); break;
       case CMD.PHOTO: onPhoto(p); break;
       case CMD.POI_MODE: {
-        poiMode = p.idx || 0;
+        poiMode = !(p.idx & 1) ? 0 : ((p.idx & 2) ? 2 : 1);
+        if (typeof p.num === 'number') poiMask = p.num;
         var hs = views.home;
         if (hs && lastKind === 'home' && hs.markers) {
           if (p.seq !== undefined) hs.seq = p.seq;

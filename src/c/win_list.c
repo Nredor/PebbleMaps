@@ -5,6 +5,7 @@
 #define MAX_FAVS 20
 #define MAX_RECENTS 10
 #define MAX_STEPS 40
+#define MP_FIRST_CAT (PM_LOWMEM ? 1 : 2)   // places-on-map menu: first kind-of-place row
 
 typedef struct ListWin {
   ListKind kind;
@@ -34,6 +35,7 @@ static const char *title_for(ListKind k) {
     case LW_MODES: return "Get there by";
     case LW_STEPS: return "Directions";
     case LW_SETMODE: return "Default travel mode";
+    case LW_MAPPLACES: return "Places on map";
   }
   return "";
 }
@@ -158,9 +160,38 @@ static uint16_t num_rows(MenuLayer *m, uint16_t section, void *ctx) {
       if (section == 0) return lw->count + (lw->count ? 1 : 2);  // + hint + "Save my location"
       return lw->count2 ? lw->count2 : 0;
     case LW_CATEGORIES: return CATEGORY_COUNT + 1;  // + Favorites
+    case LW_MAPPLACES: return MP_FIRST_CAT + MAP_CAT_COUNT;
     case LW_STEPS: return lw->loaded ? (lw->count ? lw->count : 1) : 0;
     default: return lw->count;
   }
+}
+
+// --- Places on the map: switches -------------------------------------------------
+// rows: show places, (show names), then one per kind of place
+
+static bool mp_on(int row) {
+  if (row == 0) return g_app.pois_on;
+  if (row < MP_FIRST_CAT) return g_app.poi_names;
+  return (g_app.poi_mask >> (row - MP_FIRST_CAT)) & 1;
+}
+
+static void mp_toggle(int row) {
+  if (row == 0) g_app.pois_on = !g_app.pois_on;
+  else if (row < MP_FIRST_CAT) g_app.poi_names = !g_app.poi_names;
+  else g_app.poi_mask ^= 1 << (row - MP_FIRST_CAT);
+  poi_prefs_save();
+}
+
+// A small on/off switch
+static void draw_switch(GContext *ctx, GPoint c, bool on, bool hl) {
+  GRect r = GRect(c.x - 12, c.y - 7, 24, 14);
+  GColor track = on ? (hl ? GColorWhite : C_BLUE) : (hl ? PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite) : PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+  graphics_context_set_fill_color(ctx, track);
+  graphics_fill_rect(ctx, r, 7, GCornersAll);
+  graphics_context_set_stroke_color(ctx, hl ? GColorWhite : C_DIVIDER);
+  graphics_draw_round_rect(ctx, r, 7);
+  graphics_context_set_fill_color(ctx, on ? (hl ? C_BLUE : GColorWhite) : (hl ? C_BLUE : GColorBlack));
+  graphics_fill_circle(ctx, GPoint(on ? r.origin.x + 17 : r.origin.x + 7, c.y), 4);
 }
 
 static int16_t header_h(MenuLayer *m, uint16_t section, void *ctx) {
@@ -258,6 +289,25 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
       *icon_color = (GColor){ .argb = CATEGORY_COLORS[i->row - 1] };
 #endif
       break;
+    case LW_MAPPLACES: {
+      int r = i->row;
+      if (r == 0) {
+        *title = "Show places";
+        *icon = ICON_EXPLORE;
+        *icon_color = C_PIN;
+      } else if (r < MP_FIRST_CAT) {
+        *title = "Show names";
+        *icon = ICON_POI_NAMES;
+      } else {
+        *title = map_cat_name(r - MP_FIRST_CAT);
+        *icon = map_cat_icon(r - MP_FIRST_CAT);
+#ifdef PBL_COLOR
+        *icon_color = map_cat_color(r - MP_FIRST_CAT);
+#endif
+      }
+      *sub = PBL_IF_ROUND_ELSE(mp_on(r) ? "On" : "Off", NULL);
+      break;
+    }
     case LW_STEPS:
       if (!lw->count) {
         *title = "No steps";
@@ -334,6 +384,10 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
     tx = 6;
   }
   int tw = b.size.w - tx - 4;
+  if (lw->kind == LW_MAPPLACES) {
+    draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), mp_on(i->row), hl);
+    tw -= 34;
+  }
   int sub_h = sub ? g_fonts.small_h : 0;
   graphics_context_set_text_color(ctx, fg);
   graphics_draw_text(ctx, title, g_fonts.body_b, GRect(tx, -2, tw - (badge ? 50 : 0), b.size.h - sub_h - 2),
@@ -408,6 +462,10 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
       } else {
         place_window_push(SRC_RECENTS, i->row, lw->items2[i->row].title);
       }
+      break;
+    case LW_MAPPLACES:
+      mp_toggle(i->row);
+      menu_layer_reload_data(lw->menu);
       break;
     case LW_CATEGORIES:
       if (i->row == 0) list_window_push(LW_FAVS, 0);
@@ -492,7 +550,7 @@ static void window_load(Window *window) {
     int sel = lw->kind == LW_MODES ? lw->arg : 0;
     menu_layer_set_selected_index(lw->menu, MenuIndex(0, sel), MenuRowAlignCenter, false);
   }
-  if (lw->kind == LW_CATEGORIES) lw->loaded = true;
+  if (lw->kind == LW_CATEGORIES || lw->kind == LW_MAPPLACES) lw->loaded = true;
   request(lw);
 }
 
