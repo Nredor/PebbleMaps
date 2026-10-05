@@ -187,38 +187,51 @@ function placeFrom(p) {
   };
 }
 
-function searchText(query, loc, cb, openNow) {
-  var body = { textQuery: query, pageSize: 10, languageCode: config.language };
-  if (openNow) body.openNow = true;   // only places open right now
+// "Hide closed places": ask for the open-now flag and drop only places Google says are closed
+// right now; places without opening hours (parks, addresses, landmarks) stay. Asking for hours
+// puts the lookup in Google's Enterprise tier (1,000 free a month), so only searches and the
+// Places lists do this; the map dots use cheaper lookups (see index.js).
+var OPEN_FIELD = ',places.currentOpeningHours.openNow';
+
+function notClosed(raw) {
+  return !(raw.currentOpeningHours && raw.currentOpeningHours.openNow === false);
+}
+
+function searchText(query, loc, cb, hideClosed) {
+  var n = hideClosed ? 20 : 10;   // room for closed ones we drop
+  var body = { textQuery: query, pageSize: n, languageCode: config.language };
   if (loc) {
     body.locationBias = { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: 40000 } };
   }
+  var mask = PLACE_FIELDS + (hideClosed ? OPEN_FIELD : '');
   function done(err, j) {
     if (err) return cb(err);
-    cb(null, (j.places || []).map(placeFrom).filter(function (p) { return p.lat !== undefined; }));
+    cb(null, (j.places || []).filter(hideClosed ? notClosed : function () { return true; })
+      .map(placeFrom).filter(function (p) { return p.lat !== undefined; }).slice(0, 10));
   }
-  postJSON('places', '/v1/places:searchText', PLACE_FIELDS, body, 'Places API', function (err, j) {
+  postJSON('places', '/v1/places:searchText', mask, body, 'Places API', function (err, j) {
     // Older/newer API versions name the result limit differently; retry once without it.
     if (err && /pageSize|unknown name|invalid json payload/i.test(err.text || '')) {
       delete body.pageSize;
-      body.maxResultCount = 10;
-      return postJSON('places', '/v1/places:searchText', PLACE_FIELDS, body, 'Places API', done);
+      body.maxResultCount = n;
+      return postJSON('places', '/v1/places:searchText', mask, body, 'Places API', done);
     }
     done(err, j);
   });
 }
 
-function searchNearby(category, loc, cb) {
+function searchNearby(category, loc, cb, hideClosed) {
   var body = {
     includedTypes: category.types,
-    maxResultCount: 10,
+    maxResultCount: hideClosed ? 20 : 10,   // room for closed ones we drop
     rankPreference: category.rank,
     languageCode: config.language,
     locationRestriction: { circle: { center: { latitude: loc[0], longitude: loc[1] }, radius: category.radius } }
   };
-  postJSON('places', '/v1/places:searchNearby', PLACE_FIELDS, body, 'Places API', function (err, j) {
+  postJSON('places', '/v1/places:searchNearby', PLACE_FIELDS + (hideClosed ? OPEN_FIELD : ''), body, 'Places API', function (err, j) {
     if (err) return cb(err);
-    cb(null, (j.places || []).map(placeFrom).filter(function (p) { return p.lat !== undefined; }));
+    cb(null, (j.places || []).filter(hideClosed ? notClosed : function () { return true; })
+      .map(placeFrom).filter(function (p) { return p.lat !== undefined; }).slice(0, 10));
   });
 }
 

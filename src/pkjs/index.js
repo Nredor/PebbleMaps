@@ -699,6 +699,29 @@ function enabledCats() {
   return out;
 }
 
+// Map dots with "Open now": two cheap lookups (all places, and open-now places). A place
+// that only shows up in the first is closed now, or has no opening hours on Google. Kinds
+// that normally post hours (restaurants, shops, museums...) are taken as closed and hidden;
+// the rest (parks, ATMs, parking, stations, landmarks...) stay.
+var POSTS_HOURS = /restaurant|food|meal|cafe|coffee|bar$|^bar|pub|bakery|ice_cream|dessert|tea|store|shop|market|mall|museum|gallery|gym|pharmacy|drugstore|bank$|salon|spa|theater|cinema|movie|library|gas_station|car_wash|winery|brewery|night_club|bowling|zoo|aquarium|post_office/;
+
+function poisNotClosed(center, radius, cat, cb) {
+  google.searchPois(center, radius, cat, function (e1, all) {
+    if (e1) return cb(e1);
+    google.searchOpen(center, radius, cat, function (e2, open) {
+      if (e2) return cb(null, all);   // couldn't check: show them all rather than none
+      var isOpen = {};
+      open.forEach(function (pl) { isOpen[pl.placeId] = true; });
+      var out = open.slice();
+      all.forEach(function (pl) {
+        if (isOpen[pl.placeId]) return;
+        if (!POSTS_HOURS.test(pl.primaryType || '')) out.push(pl);   // probably no hours: keep
+      });
+      cb(null, out);
+    });
+  });
+}
+
 var POI_CELL = 512;   // map pixels per lookup area (about one Google map picture)
 
 function poiCell(v, dx, dy) {
@@ -748,7 +771,7 @@ function maybeFetchPois(v) {
   var center = geo.unproject((cell[1] + 0.5) * POI_CELL, (cell[2] + 0.5) * POI_CELL, z);
   var mpp = 156543.03 * Math.cos(geo.rad(center[0])) / Math.pow(2, z);
   var radius = Math.max(150, Math.min(3000, mpp * POI_CELL * 0.72));
-  (oflag ? google.searchOpen : google.searchPois)(center, radius, MAP_CATS[cat], function (err, list) {
+  (oflag ? poisNotClosed : google.searchPois)(center, radius, MAP_CATS[cat], function (err, list) {
     poiState.busy = false;
     if (err) {
       console.log('places on map: ' + (err.text || err.title));
@@ -838,9 +861,8 @@ function onNearby(p) {
   sendBusy('Finding ' + cat.name.toLowerCase());
   getLocation(60000, function (err, loc) {
     if (err) return sendError(err);
-    var open = p.mode === 1;   // the Places menu's "Open now" switch
-    var find = open ? function (c, l, cb) { google.searchOpen(l, c.radius, c, cb); } : google.searchNearby;
-    find(cat, loc, function (e2, list) {
+    var open = p.mode === 1;   // the "Open now" switch: hide places that are closed right now
+    google.searchNearby(cat, loc, function (e2, list) {
       if (e2) return sendError(e2);
       results = list;
       if (!list.length) {
@@ -848,7 +870,7 @@ function onNearby(p) {
           (open ? ' Turn off "Open now" in Places to see all.' : '') });
       }
       sendList(P.LIST.RESULTS, resultItems());
-    });
+    }, open);
   });
 }
 
