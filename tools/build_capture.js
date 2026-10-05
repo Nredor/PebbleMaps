@@ -6,9 +6,12 @@ var path = require('path');
 var g = require('../src/pkjs/google.js')._internal;
 var HOME = process.env.PM_HOME ? JSON.parse(process.env.PM_HOME) : [47.6110, -122.3370];   // Seattle, Westlake Park
 
-var core = fs.readFileSync(path.join(__dirname, 'demo_capture.js'), 'utf8')
+var EXTRAS = process.argv.indexOf('--extras') > 0;   // second capture: places, photos, transit
+var ZIPNAME = EXTRAS ? 'pebblemaps-demo-extras.zip' : 'pebblemaps-demo-data.zip';
+var core = fs.readFileSync(path.join(__dirname, EXTRAS ? 'demo_extras.js' : 'demo_capture.js'), 'utf8')
   .replace('__CONSTS__', JSON.stringify({ STYLES: { light: g.STYLES.light }, PLACE_FIELDS: g.PLACE_FIELDS,
-                                          ROUTE_FIELDS_FULL: g.ROUTE_FIELDS_FULL, ROUTE_FIELDS_SUMMARY: g.ROUTE_FIELDS_SUMMARY }));
+                                          ROUTE_FIELDS_FULL: g.ROUTE_FIELDS_FULL, ROUTE_FIELDS_SUMMARY: g.ROUTE_FIELDS_SUMMARY,
+                                          INFO_FIELDS: g.INFO_FIELDS }));
 
 var ui = [
   'function pmStartCapture(root, getKey) {',
@@ -23,8 +26,8 @@ var ui = [
   '      if (err) { log("Stopped: " + err); return; }',
   '      var url = URL.createObjectURL(blob);',
   '      var a = document.createElement("a");',
-  '      a.href = url; a.download = "pebblemaps-demo-data.zip"; a.className = "pmc-dl";',
-  '      a.textContent = "Download pebblemaps-demo-data.zip (" + Math.round(blob.size / 1024) + " KB)";',
+  '      a.href = url; a.download = "' + ZIPNAME + '"; a.className = "pmc-dl";',
+  '      a.textContent = "Download ' + ZIPNAME + ' (" + Math.round(blob.size / 1024) + " KB)";',
   '      out.appendChild(a);',
   '      log("Done! Tap the download link, then attach the zip in the chat.");',
   '      try { a.click(); } catch (e) {}',
@@ -51,7 +54,7 @@ if (process.argv[3]) {
   // Clay component: same tool inside the Pebble Maps settings page (uses the key box there)
   var comp = 'module.exports = {\n  name: "pmcapture",\n  template: ' + JSON.stringify(
     '<div class="pmc"><style>' + css + '</style><h4>Demo data for screenshots</h4><p>Uses the Google key below to collect map pictures and places around downtown Seattle, then downloads a zip to attach in the chat.</p>' +
-    '<button type="button" class="pmc-go">Collect demo data</button><div class="pmc-log"></div><div class="pmc-out"></div></div>') +
+    '<button type="button" class="pmc-go">' + (EXTRAS ? 'Collect more demo data' : 'Collect demo data') + '</button><div class="pmc-log"></div><div class="pmc-out"></div></div>') +
     ',\n  manipulator: { get: function () { return ""; }, set: function () { return this; }, hide: function () { return this; }, show: function () { return this; } },\n' +
     '  initialize: function (minified, clay) {\n' + core + '\n' + ui + '\n' +
     '    var root = this.$element[0];\n' +

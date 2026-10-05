@@ -637,7 +637,7 @@ function checkKey(loc, cb) {
 }
 
 module.exports = {
-  _internal: { STYLES: STYLES, PLACE_FIELDS: PLACE_FIELDS, ROUTE_FIELDS_FULL: ROUTE_FIELDS_FULL, ROUTE_FIELDS_SUMMARY: ROUTE_FIELDS_SUMMARY },
+  _internal: { STYLES: STYLES, PLACE_FIELDS: PLACE_FIELDS, ROUTE_FIELDS_FULL: ROUTE_FIELDS_FULL, ROUTE_FIELDS_SUMMARY: ROUTE_FIELDS_SUMMARY, INFO_FIELDS: INFO_FIELDS },
   tts: tts,
   autocomplete: autocomplete,
   placeDetails: placeDetails,
