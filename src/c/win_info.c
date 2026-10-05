@@ -106,6 +106,13 @@ static void draw_header(GContext *ctx, int w, int h) {
   }
 }
 
+// Select opens Directions once the photos are scrolled away (or there's nothing to flip through)
+static bool dir_focused(void) {
+  if (!s_loaded) return false;
+  if (s_photos < 2) return true;
+  return s_scroll && -scroll_layer_get_content_offset(s_scroll).y >= s_photo_h / 2;
+}
+
 // Lays out (and draws, with ctx) the whole page. Returns the content height.
 static int layout(GContext *ctx, GRect b) {
   int w = b.size.w;
@@ -149,9 +156,17 @@ static int layout(GContext *ctx, GRect b) {
   int bw = PBL_IF_ROUND_ELSE(w * 6 / 10, tw);
   s_dir_btn = GRect((w - bw) / 2, y, bw, bh);
   if (ctx) {
-    graphics_context_set_fill_color(ctx, C_BLUE);
+    // highlighted (white ring) once you've scrolled past the photos: Select then opens it
+    bool focus = dir_focused();
+    graphics_context_set_fill_color(ctx, focus ? C_BLUE_DARK : C_BLUE);
     graphics_fill_rect(ctx, s_dir_btn, bh / 2, GCornersAll);
-    const char *label = g_app.touch ? "Directions" : "Hold Select: go";
+    if (focus) {
+      graphics_context_set_stroke_color(ctx, GColorWhite);
+      graphics_context_set_stroke_width(ctx, 2);
+      graphics_draw_round_rect(ctx, grect_inset(s_dir_btn, GEdgeInsets(2)), bh / 2 - 2);
+      graphics_context_set_stroke_width(ctx, 1);
+    }
+    const char *label = "Directions";
     GFont f = g_fonts.small_b;
     int lw = graphics_text_layout_get_content_size(label, f, GRect(0, 0, bw, bh), GTextOverflowModeFill, GTextAlignmentLeft).w;
     int x0 = s_dir_btn.origin.x + (bw - lw - 18) / 2;
@@ -264,15 +279,11 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
 }
 
 // --- Actions ---------------------------------------------------------------------
+// Directions: the "Get there by" list (Back returns here)
 static void go_directions(void) {
   if (!s_loaded) return;
-  if (s_src == SRC_DEST) {   // opened from the place screen: go back to it
-    window_stack_remove(s_window, true);
-    return;
-  }
-  Window *w = s_window;
-  place_window_push(s_src, s_idx, s_name);
-  window_stack_remove(w, false);
+  if (s_src != SRC_DEST) comm_cmd2(CMD_SELECT, s_idx, s_src);   // this place becomes the destination
+  list_window_push(LW_MODES, s_src == SRC_DEST ? place_default_mode() : g_app.default_mode);
 }
 
 static void next_photo(void) {
@@ -284,9 +295,11 @@ static void next_photo(void) {
 }
 
 static void select_click(ClickRecognizerRef r, void *ctx) {
-  if (s_photos > 1) next_photo();
-  else go_directions();
+  if (dir_focused()) go_directions();
+  else next_photo();
 }
+
+static void scrolled(ScrollLayer *sl, void *ctx) { layer_mark_dirty(s_content); }
 static void select_long(ClickRecognizerRef r, void *ctx) { go_directions(); }
 
 static void click_config(void *ctx) {
@@ -320,7 +333,8 @@ static void window_load(Window *window) {
   GRect b = layer_get_bounds(root);
   s_scroll = scroll_layer_create(b);
   scroll_layer_set_shadow_hidden(s_scroll, true);
-  scroll_layer_set_callbacks(s_scroll, (ScrollLayerCallbacks){ .click_config_provider = click_config });
+  scroll_layer_set_callbacks(s_scroll, (ScrollLayerCallbacks){ .click_config_provider = click_config,
+                                                              .content_offset_changed_handler = scrolled });
   scroll_layer_set_click_config_onto_window(s_scroll, window);
   s_content = layer_create(GRect(0, 0, b.size.w, b.size.h));
   layer_set_update_proc(s_content, content_update);

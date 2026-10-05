@@ -62,23 +62,28 @@ void poi_prefs_load(void) {
   g_app.pois_on = true;
   g_app.poi_names = !PM_LOWMEM;
   g_app.poi_mask = (1 << 0) | (1 << 1) | (1 << 12) | (1 << MAP_CAT_OTHER);   // restaurants, coffee, bars, other
+  g_app.open_map = g_app.open_list = true;
   if (persist_exists(PERSIST_POI_PREFS)) {
     int v = persist_read_int(PERSIST_POI_PREFS);
     g_app.pois_on = v & 1;
     g_app.poi_names = (v & 2) && !PM_LOWMEM;
-    g_app.poi_mask = (v >> 2) & 0xFFFF;
+    g_app.poi_mask = (v >> 2) & 0x3FFF;
+    // "open now" switches came later: stored inverted so older saves read as on
+    g_app.open_map = !(v & (1 << 16));
+    g_app.open_list = !(v & (1 << 17));
   }
 }
 void poi_prefs_send(void) {
   OutMsg m;
   comm_msg_init(&m, CMD_POI_MODE);
-  m.idx = (g_app.pois_on ? 1 : 0) | (g_app.poi_names ? 2 : 0);
+  m.idx = (g_app.pois_on ? 1 : 0) | (g_app.poi_names ? 2 : 0) | (g_app.open_map ? 4 : 0);
   m.num = g_app.poi_mask;
   m.seq = g_map.seq;
   comm_send(&m);
 }
 void poi_prefs_save(void) {
-  persist_write_int(PERSIST_POI_PREFS, (g_app.pois_on ? 1 : 0) | (g_app.poi_names ? 2 : 0) | (g_app.poi_mask << 2));
+  persist_write_int(PERSIST_POI_PREFS, (g_app.pois_on ? 1 : 0) | (g_app.poi_names ? 2 : 0) | (g_app.poi_mask << 2) |
+                    (g_app.open_map ? 0 : 1 << 16) | (g_app.open_list ? 0 : 1 << 17));
   poi_prefs_send();
 }
 

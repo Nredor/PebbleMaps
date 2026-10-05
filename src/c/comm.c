@@ -9,7 +9,8 @@
 
 static CommHandler s_handler;
 static void *s_handler_ctx;
-static OutMsg s_queue[QUEUE_LEN];
+// on the heap, not in the app image: Pebble Time 2 / Round 2 apps are capped at 64 KB of code + statics
+static OutMsg *s_queue;
 static int s_q_head, s_q_count;
 static bool s_sending;
 static int s_retries;
@@ -86,6 +87,7 @@ static void pump(void) {
 }
 
 void comm_send(const OutMsg *m) {
+  if (!s_queue) return;
   if (s_q_count == QUEUE_LEN) {
     // drop the oldest pending message
     s_q_head = (s_q_head + 1) % QUEUE_LEN;
@@ -181,6 +183,7 @@ void comm_clear_handler(CommHandler handler) {
 }
 
 void comm_init(void) {
+  s_queue = calloc(QUEUE_LEN, sizeof(OutMsg));
   app_message_register_inbox_received(inbox_received);
   app_message_register_inbox_dropped(inbox_dropped);
   app_message_register_outbox_sent(outbox_sent);

@@ -31,7 +31,7 @@ static uint8_t *s_play;
 static int s_samples, s_pos;       // total samples, next sample to decode
 static int32_t s_pred;
 static int s_index;
-static int16_t s_buf[BLOCK];
+static int16_t *s_buf;   // on the heap (app image size limit)
 static int s_buf_n, s_buf_off;     // decoded samples waiting, and how many already written
 static AppTimer *s_timer;
 static bool s_open;
@@ -66,6 +66,8 @@ void voice_stop(void) {
 static void decode_block(void) {
   s_buf_n = 0;
   s_buf_off = 0;
+  if (!s_buf) s_buf = malloc(BLOCK * sizeof(int16_t));
+  if (!s_buf) return;
   while (s_buf_n < BLOCK && s_pos < s_samples) {
     uint8_t byte = s_play[s_pos >> 1];
     int code = (s_pos & 1) ? (byte & 0x0F) : (byte >> 4);

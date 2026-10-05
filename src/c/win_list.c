@@ -5,7 +5,10 @@
 #define MAX_FAVS 20
 #define MAX_RECENTS 10
 #define MAX_STEPS 40
-#define MP_FIRST_CAT (PM_LOWMEM ? 1 : 2)   // places-on-map menu: first kind-of-place row
+#define MP_OPEN (PM_LOWMEM ? 1 : 2)        // places-on-map menu: "open now" row
+#define MP_FIRST_CAT (MP_OPEN + 1)          // ...first kind-of-place row
+#define PL_OPEN 1                          // Places menu: "open now" row (after Favorites)
+#define PL_FIRST_CAT 2
 
 typedef struct ListWin {
   ListKind kind;
@@ -44,6 +47,7 @@ static GColor header_color(ListKind k) {
   switch (k) {
     case LW_FAVS: return PBL_IF_COLOR_ELSE(GColorChromeYellow, GColorBlack);
     case LW_STEPS: return C_NAVGREEN;
+    case LW_MODES: return C_NAVGREEN;
     default: return C_BLUE;
   }
 }
@@ -95,6 +99,13 @@ static void request(ListWin *lw) {
   dots_layer_set_running(lw->dots, !lw->loaded);
 }
 
+// Reload rows, keeping the selected row on screen (rows can change height as data arrives)
+static void list_reload(ListWin *lw) {
+  menu_layer_reload_data(lw->menu);
+  if (lw->kind == LW_MAPPLACES || lw->kind == LW_CATEGORIES) return;   // switches: rows keep their size
+  menu_layer_set_selected_index(lw->menu, menu_layer_get_selected_index(lw->menu), MenuRowAlignCenter, false);
+}
+
 static void handle(int cmd, DictionaryIterator *it, void *ctx) {
   ListWin *lw = ctx;
   switch (cmd) {
@@ -125,7 +136,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
         return;
       }
       dots_layer_set_running(lw->dots, false);
-      menu_layer_reload_data(lw->menu);
+      list_reload(lw);
       break;
     }
     case CMD_TOAST:
@@ -138,7 +149,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       if (lw->kind == LW_MODES) {
         // keep the picker usable even if times failed
         for (int i = 0; i < MODE_COUNT; i++) lw->mode_sub[i][0] = 0;
-        menu_layer_reload_data(lw->menu);
+        list_reload(lw);
       } else {
         show_error(it);
       }
@@ -159,7 +170,7 @@ static uint16_t num_rows(MenuLayer *m, uint16_t section, void *ctx) {
       if (!lw->loaded) return 0;
       if (section == 0) return lw->count + (lw->count ? 1 : 2);  // + hint + "Save my location"
       return lw->count2 ? lw->count2 : 0;
-    case LW_CATEGORIES: return CATEGORY_COUNT + 1;  // + Favorites
+    case LW_CATEGORIES: return CATEGORY_COUNT + PL_FIRST_CAT;  // + Favorites, Open now
     case LW_MAPPLACES: return MP_FIRST_CAT + MAP_CAT_COUNT;
     case LW_STEPS: return lw->loaded ? (lw->count ? lw->count : 1) : 0;
     default: return lw->count;
@@ -171,12 +182,14 @@ static uint16_t num_rows(MenuLayer *m, uint16_t section, void *ctx) {
 
 static bool mp_on(int row) {
   if (row == 0) return g_app.pois_on;
+  if (row == MP_OPEN) return g_app.open_map;
   if (row < MP_FIRST_CAT) return g_app.poi_names;
   return (g_app.poi_mask >> (row - MP_FIRST_CAT)) & 1;
 }
 
 static void mp_toggle(int row) {
   if (row == 0) g_app.pois_on = !g_app.pois_on;
+  else if (row == MP_OPEN) g_app.open_map = !g_app.open_map;
   else if (row < MP_FIRST_CAT) g_app.poi_names = !g_app.poi_names;
   else g_app.poi_mask ^= 1 << (row - MP_FIRST_CAT);
   poi_prefs_save();
@@ -286,11 +299,18 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
         *icon_color = C_STAR;
         break;
       }
-      *title = CATEGORY_NAMES[i->row - 1];
+      if (i->row == PL_OPEN) {
+        *title = "Open now";
+        *sub = PBL_IF_ROUND_ELSE(g_app.open_list ? "On" : "Off", NULL);
+        *icon = ICON_CLOCK;
+        *icon_color = C_GREEN;
+        break;
+      }
+      *title = CATEGORY_NAMES[i->row - PL_FIRST_CAT];
       *sub = NULL;
-      *icon = CATEGORY_ICONS[i->row - 1];
+      *icon = CATEGORY_ICONS[i->row - PL_FIRST_CAT];
 #ifdef PBL_COLOR
-      *icon_color = (GColor){ .argb = CATEGORY_COLORS[i->row - 1] };
+      *icon_color = (GColor){ .argb = CATEGORY_COLORS[i->row - PL_FIRST_CAT] };
 #endif
       break;
     case LW_MAPPLACES: {
@@ -299,6 +319,10 @@ static void row_content(ListWin *lw, MenuIndex *i, const char **title, const cha
         *title = "Show places";
         *icon = ICON_EXPLORE;
         *icon_color = C_PIN;
+      } else if (r == MP_OPEN) {
+        *title = "Open now";
+        *icon = ICON_CLOCK;
+        *icon_color = C_GREEN;
       } else if (r < MP_FIRST_CAT) {
         *title = "Show names";
         *icon = ICON_POI_NAMES;
@@ -396,8 +420,9 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   }
   int tw = b.size.w - tx - 4;
   if (lw->kind == LW_STEPS && lw->count && lw->items[i->row].extra) tw -= 12;
-  if (lw->kind == LW_MAPPLACES) {
-    draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), mp_on(i->row), hl, dim);
+  if (lw->kind == LW_MAPPLACES || (lw->kind == LW_CATEGORIES && i->row == PL_OPEN)) {
+    bool on = lw->kind == LW_MAPPLACES ? mp_on(i->row) : g_app.open_list;
+    draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), on, hl, dim);
     tw -= 34;
   }
   int sub_h = sub ? g_fonts.small_h : 0;
@@ -483,11 +508,15 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
     case LW_MAPPLACES:
       if (mp_disabled(i->row)) break;   // greyed out while places are off
       mp_toggle(i->row);
-      menu_layer_reload_data(lw->menu);
+      list_reload(lw);
       break;
     case LW_CATEGORIES:
       if (i->row == 0) list_window_push(LW_FAVS, 0);
-      else results_window_push_nearby(i->row - 1);
+      else if (i->row == PL_OPEN) {
+        g_app.open_list = !g_app.open_list;
+        poi_prefs_save();
+        list_reload(lw);
+      } else results_window_push_nearby(i->row - PL_FIRST_CAT);
       break;
     case LW_MODES:
       route_window_push(i->row);

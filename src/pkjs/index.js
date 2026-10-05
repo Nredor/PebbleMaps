@@ -690,6 +690,7 @@ function poiCategory(t) {
   return CAT_OTHER;
 }
 
+var poiOpen = true;       // places on the map: open now only (watch switch)
 var poiMask = (1 << 0) | (1 << 1) | (1 << 12) | (1 << CAT_OTHER);   // the watch sends its choice
 
 function enabledCats() {
@@ -713,7 +714,7 @@ function rebuildPois(v) {
     var l = [];
     for (var dy = -1; dy <= 1; dy++) {
       for (var dx = -1; dx <= 1; dx++) {
-        (poiCache[poiCell(v, dx, dy).join(':') + ':' + cat] || []).forEach(function (pl) { l.push(pl); });
+        (poiCache[poiCell(v, dx, dy).join(':') + ':' + cat + (poiOpen ? 'o' : '')] || []).forEach(function (pl) { l.push(pl); });
       }
     }
     return l;
@@ -739,14 +740,15 @@ function maybeFetchPois(v) {
   rebuildPois(v);
   var cell = poiCell(v);
   var base = cell.join(':');
-  var cat = enabledCats().filter(function (c) { return !poiCache[base + ':' + c]; })[0];
+  var oflag = poiOpen ? 'o' : '';
+  var cat = enabledCats().filter(function (c) { return !poiCache[base + ':' + c + oflag]; })[0];
   if (cat === undefined || poiState.busy || Date.now() < poiState.failUntil) return;
   poiState.busy = true;
   var z = cell[0];
   var center = geo.unproject((cell[1] + 0.5) * POI_CELL, (cell[2] + 0.5) * POI_CELL, z);
   var mpp = 156543.03 * Math.cos(geo.rad(center[0])) / Math.pow(2, z);
   var radius = Math.max(150, Math.min(3000, mpp * POI_CELL * 0.72));
-  google.searchPois(center, radius, MAP_CATS[cat], function (err, list) {
+  (oflag ? google.searchOpen : google.searchPois)(center, radius, MAP_CATS[cat], function (err, list) {
     poiState.busy = false;
     if (err) {
       console.log('places on map: ' + (err.text || err.title));
@@ -754,7 +756,7 @@ function maybeFetchPois(v) {
       return;
     }
     list.forEach(function (pl) { pl.cat = cat; });
-    poiCache[base + ':' + cat] = list;
+    poiCache[base + ':' + cat + oflag] = list;
     var keys = Object.keys(poiCache);
     if (keys.length > 150) delete poiCache[keys[0]];
     var st = views.home;
@@ -832,10 +834,15 @@ function onNearby(p) {
   sendBusy('Finding ' + cat.name.toLowerCase());
   getLocation(60000, function (err, loc) {
     if (err) return sendError(err);
-    google.searchNearby(cat, loc, function (e2, list) {
+    var open = p.mode === 1;   // the Places menu's "Open now" switch
+    var find = open ? function (c, l, cb) { google.searchOpen(l, c.radius, c, cb); } : google.searchNearby;
+    find(cat, loc, function (e2, list) {
       if (e2) return sendError(e2);
       results = list;
-      if (!list.length) return sendError({ code: P.ERR.NO_RESULTS, text: 'No ' + cat.name.toLowerCase() + ' found nearby.' });
+      if (!list.length) {
+        return sendError({ code: P.ERR.NO_RESULTS, text: 'No ' + cat.name.toLowerCase() + (open ? ' open right now' : '') + ' nearby.' +
+          (open ? ' Turn off "Open now" in Places to see all.' : '') });
+      }
       sendList(P.LIST.RESULTS, resultItems());
     });
   });
@@ -1634,6 +1641,7 @@ function onMessage(e) {
       case CMD.PHOTO: onPhoto(p); break;
       case CMD.POI_MODE: {
         poiMode = !(p.idx & 1) ? 0 : ((p.idx & 2) ? 2 : 1);
+        poiOpen = !!(p.idx & 4);
         if (typeof p.num === 'number') poiMask = p.num;
         var hs = views.home;
         if (hs && lastKind === 'home' && hs.markers) {

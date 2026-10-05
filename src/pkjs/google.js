@@ -287,6 +287,27 @@ function searchPois(loc, radius, cat, cb) {
   });
 }
 
+// Places of one kind that are open right now (Text Search does the "open now" filtering,
+// so we don't pay for opening-hours fields). cb(err, [place + primaryType])
+function searchOpen(loc, radius, cat, cb) {
+  var dLat = radius / 111320, dLng = radius / (111320 * Math.cos(loc[0] * Math.PI / 180));
+  var body = {
+    textQuery: cat.name, includedType: cat.types[0], openNow: true, pageSize: 20, languageCode: config.language,
+    rankPreference: cat.rank === 'DISTANCE' ? 'DISTANCE' : 'RELEVANCE',
+    locationRestriction: { rectangle: {
+      low: { latitude: loc[0] - dLat, longitude: loc[1] - dLng },
+      high: { latitude: loc[0] + dLat, longitude: loc[1] + dLng } } }
+  };
+  postJSON('places', '/v1/places:searchText', PLACE_FIELDS + ',places.primaryType', body, 'Places API', function (err, j) {
+    if (err) return cb(err);
+    cb(null, (j.places || []).map(function (p) {
+      var o = placeFrom(p);
+      o.primaryType = p.primaryType || '';
+      return o;
+    }).filter(function (p) { return p.lat !== undefined; }));
+  });
+}
+
 var PRICE = { PRICE_LEVEL_FREE: 'Free', PRICE_LEVEL_INEXPENSIVE: '$', PRICE_LEVEL_MODERATE: '$$',
   PRICE_LEVEL_EXPENSIVE: '$$$', PRICE_LEVEL_VERY_EXPENSIVE: '$$$$' };
 var INFO_FIELDS = 'id,displayName,formattedAddress,shortFormattedAddress,location,primaryType,primaryTypeDisplayName,' +
@@ -607,6 +628,7 @@ module.exports = {
   autocomplete: autocomplete,
   placeDetails: placeDetails,
   searchPois: searchPois,
+  searchOpen: searchOpen,
   placeInfo: placeInfo,
   placePhoto: placePhoto,
   transitDepartures: transitDepartures,

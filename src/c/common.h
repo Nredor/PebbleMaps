@@ -135,6 +135,8 @@ typedef struct {
   bool pois_on;        // places drawn on the main map
   bool poi_names;      // ...with their names
   uint16_t poi_mask;   // which kinds of places (bit per MAP_CAT)
+  bool open_map;       // places on the map: open now only
+  bool open_list;      // Places menu results: open now only
   uint16_t inbox_size;
 } AppState;
 

@@ -174,8 +174,7 @@ static void window_load(Window *window) {
   s_dots = dots_layer_create(GRect(0, map_h(b) + 10, b.size.w - STRIP_W, 30));
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
-  mapbar_init(&s_bar, s_canvas, GSize(b.size.w - STRIP_W, map_h(b)), ICON_PIN, ICON_NONE, bar_cb, NULL);
-  s_bar.extra_up_color = C_PIN;
+  mapbar_init(&s_bar, s_canvas, GSize(b.size.w - STRIP_W, map_h(b)), ICON_NONE, ICON_NONE, bar_cb, NULL);
   maptouch_init(&s_touch, GRect(0, 0, b.size.w - STRIP_W, map_h(b)), map_tap, NULL, &s_bar);
   comm_cmd2(CMD_SELECT, s_idx, s_src);
 }
