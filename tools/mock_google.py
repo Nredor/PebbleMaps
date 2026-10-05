@@ -362,6 +362,18 @@ class H(BaseHTTPRequestHandler):
                 res = json.loads(json.dumps(REPLAY.nearby()))
                 for pl in res.get("places", []):
                     pl.setdefault("primaryType", "restaurant")
+                if "primaryType" in (self.headers.get("X-Goog-FieldMask") or ""):
+                    # places-on-the-map lookups: add a few made-up neighbors so labels can be checked
+                    c = {"latitude": REPLAY.home[0], "longitude": REPLAY.home[1]}
+                    kinds = ["cafe", "clothing_store", "park", "museum", "hotel", "bakery", "book_store", "bar"]
+                    names = ["Blue Door Cafe", "Hanger Outfitters", "Pocket Park", "City Art Museum",
+                             "The Grand Hotel", "Rise Bakery", "Paper & Ink Books", "Corner Tap"]
+                    for k in range(8):
+                        a = k * 0.8
+                        res["places"].append({"id": "fake-%d" % k, "displayName": {"text": names[k]},
+                                              "location": {"latitude": c["latitude"] + 0.0012 * math.sin(a) * (1 + k % 3),
+                                                           "longitude": c["longitude"] + 0.0018 * math.cos(a) * (1 + k % 3)},
+                                              "primaryType": kinds[k], "formattedAddress": "Seattle, WA"})
                 return self.send(200, res)
             if self.path.endswith("places:autocomplete"):
                 return self.send(200, REPLAY.autocomplete())

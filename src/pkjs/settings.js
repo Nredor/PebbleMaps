@@ -50,7 +50,9 @@ function get() {
     allModeTimes: bool(c.allModeTimes, true),
     mapStyle: c.mapStyle || 'light',
     liveLocation: bool(c.liveLocation, true),
-    showPois: bool(c.showPois, true),
+    driveMode: bool(c.driveMode, false),
+    drivePois: bool(c.drivePois, true),
+    driveNames: bool(c.driveNames, true),
     textSize: (c.textSize === undefined || c.textSize === '' || c.textSize === 'auto') ? 3 : (parseInt(c.textSize, 10) || 0)
   };
 }

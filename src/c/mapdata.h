@@ -8,6 +8,7 @@ typedef struct {
   int16_t x, y;
   uint8_t kind;   // MK_*
   uint8_t index;  // result index for pins
+  int16_t name;   // places: offset of the name in g_map.names (-1 = none)
 } Marker;
 
 typedef struct {
@@ -17,6 +18,7 @@ typedef struct {
   bool complete;    // some picture has arrived for this screen
   Marker markers[MAX_MARKERS];
   int n_markers;
+  char *names;                // place names for the markers (one block)
   Layer *observer;
   int16_t shift_x, shift_y;   // moves the user made that the phone hasn't drawn yet
   int16_t fw, fh;             // frame size the markers refer to

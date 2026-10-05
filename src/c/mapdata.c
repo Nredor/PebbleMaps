@@ -460,6 +460,21 @@ void map_handle(int cmd, DictionaryIterator *it) {
   } else if (cmd == CMD_MARKERS) {
     const Tuple *dt = dict_find(it, MESSAGE_KEY_data);
     g_map.n_markers = 0;
+#if !PM_LOWMEM
+    // names for the places, in marker order, separated by 0x1E
+    free(g_map.names);
+    g_map.names = NULL;
+    const char *nl = tuple_str(it, MESSAGE_KEY_list);
+    if (nl[0]) {
+      size_t len = strlen(nl);
+      if (len > (PM_LOWMEM ? 220 : 600)) len = PM_LOWMEM ? 220 : 600;
+      g_map.names = malloc(len + 1);
+      if (g_map.names) {
+        memcpy(g_map.names, nl, len);
+        g_map.names[len] = 0;
+      }
+    }
+#endif
     if (dt) {
       int n = dt->length / 6;
       if (n > MAX_MARKERS) n = MAX_MARKERS;
@@ -470,7 +485,23 @@ void map_handle(int cmd, DictionaryIterator *it) {
         mk->y = (int16_t)(d[i * 6 + 2] | (d[i * 6 + 3] << 8));
         mk->kind = d[i * 6 + 4];
         mk->index = d[i * 6 + 5];
+        mk->name = -1;
       }
+#if !PM_LOWMEM
+      if (g_map.names) {
+        char *p = g_map.names;
+        for (int i = 0; i < n && *p; i++) {
+          if (g_map.markers[i].kind < MK_POI) continue;
+          char *e = p;
+          while (*e && *e != 0x1E) e++;
+          bool last = !*e;
+          *e = 0;
+          if (*p) g_map.markers[i].name = p - g_map.names;
+          if (last) break;
+          p = e + 1;
+        }
+      }
+#endif
       g_map.n_markers = n;
     }
     notify();
@@ -518,14 +549,56 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
   } else {
     draw_map_placeholder(ctx, frame);
   }
-  // places first, then start / you, then pins, the selected pin last (on top)
+  // places first (names as pills, skipping any that would cover another), then start / you,
+  // then pins, the selected pin last (on top)
+#if !PM_LOWMEM
+  GRect used[9];
+  int n_used = 0;
+  // keep names off your own dot / arrow
+  for (int i = 0; i < g_map.n_markers && !n_used; i++) {
+    const Marker *mk = &g_map.markers[i];
+    if (mk->kind == MK_ME || mk->kind == MK_ARROW) {
+      used[n_used++] = GRect(frame.origin.x + mk->x + sx - 11, frame.origin.y + mk->y + sy - 11, 22, 22);
+    }
+  }
+  int n_me = n_used;
+  for (int i = 0; i < g_map.n_markers; i++) {
+    const Marker *mk = &g_map.markers[i];
+    if (mk->kind < MK_POI || mk->name < 0 || !g_map.names) continue;
+    GPoint p = GPoint(frame.origin.x + mk->x + sx, frame.origin.y + mk->y + sy);
+    const char *name = g_map.names + mk->name;
+    GRect r = poi_label_rect(p, name, false);
+    if (r.origin.x + r.size.w > frame.origin.x + frame.size.w) r = poi_label_rect(p, name, true);   // no room: name on the left
+    bool clash = r.origin.x < frame.origin.x || r.origin.x + r.size.w > frame.origin.x + frame.size.w ||
+                 r.origin.y < frame.origin.y;
+    for (int j = 0; j < n_used && !clash; j++) {
+      clash = r.origin.x < used[j].origin.x + used[j].size.w + 2 && used[j].origin.x < r.origin.x + r.size.w + 2 &&
+              r.origin.y < used[j].origin.y + used[j].size.h + 1 && used[j].origin.y < r.origin.y + r.size.h + 1;
+    }
+    if (clash || n_used == 9) continue;
+    used[n_used++] = r;
+  }
+#endif
   for (int pass = 0; pass < 4; pass++) {
     for (int i = 0; i < g_map.n_markers; i++) {
       const Marker *mk = &g_map.markers[i];
       GPoint p = GPoint(frame.origin.x + mk->x + sx, frame.origin.y + mk->y + sy);
       bool is_sel = mk->kind == MK_PIN && mk->index == selected;
       if (pass == 0 && mk->kind >= MK_POI) {
-        draw_poi(ctx, p, mk->kind - MK_POI);
+        bool labeled = false;
+#if !PM_LOWMEM
+        if (mk->name >= 0 && g_map.names) {
+          GRect r = GRect(0, 0, 0, 0);
+          for (int j = n_me; j < n_used && !labeled; j++) {
+            // this place's pill: its dot sits at one end
+            labeled = used[j].origin.y == p.y - 7 && (used[j].origin.x == p.x - (g_fonts.level >= 1 ? 5 : 4) - 3 ||
+                                                     used[j].origin.x + used[j].size.w == p.x + (g_fonts.level >= 1 ? 5 : 4) + 3);
+            if (labeled) r = used[j];
+          }
+          if (labeled) draw_poi_label(ctx, p, mk->kind - MK_POI, g_map.names + mk->name, r);
+        }
+#endif
+        if (!labeled) draw_poi(ctx, p, mk->kind - MK_POI);
       } else if (pass == 1 && (mk->kind == MK_START || mk->kind == MK_ME || mk->kind == MK_ARROW)) {
         if (mk->kind == MK_ME) draw_me_dot(ctx, p, 5);
         else if (mk->kind == MK_ARROW) draw_puck(ctx, p, g_fonts.level >= 1 ? 7 : 6, mk->index * 2);

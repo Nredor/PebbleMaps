@@ -125,7 +125,7 @@ static int layout(GContext *ctx, GRect b) {
   s_photo_h = hh;
   if (ctx) draw_header(ctx, w, hh);
   int y = hh + 5;
-  y += put(ctx, s_name[0] ? s_name : "Loading...", g_fonts.title, C_TEXT, pad, y, tw) + 2;
+  y += put(ctx, s_name[0] ? s_name : "Loading...", g_fonts.body_b, C_TEXT, pad, y, tw) + 2;
   if (!s_loaded) return y + 50;
 
   if (s_rating > 0) {

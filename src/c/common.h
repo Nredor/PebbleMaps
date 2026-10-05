@@ -33,7 +33,7 @@ enum {
   CMD_NAV_VOICE = 24,
   CMD_INFO = 25,
   CMD_PHOTO = 26,
-  CMD_HOME_DRIVE = 27,
+  CMD_POI_MODE = 27,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,
@@ -118,6 +118,7 @@ typedef struct {
   bool vibrate;
   bool has_mic;
   bool touch;
+  bool dark_map;       // dark map colors (color watches)
   uint16_t inbox_size;
 } AppState;
 

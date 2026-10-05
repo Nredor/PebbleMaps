@@ -433,6 +433,57 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 4, 20, 36, 20);
       graphics_draw_arc(ctx, GRect(P(12, 3).x, P(12, 3).y, S(16), S(34)), GOvalScaleModeFitCircle, 0, TRIG_MAX_ANGLE);
       break;
+    case ICON_POI_OFF:
+      // a grey place dot, crossed out
+      graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+      circle(ctx, 20, 20, 13, true);
+      graphics_context_set_stroke_width(ctx, sw);
+      circle(ctx, 20, 20, 13, false);
+      line(ctx, 7, 33, 33, 7);
+      break;
+    case ICON_POI_DOTS: {
+      // a place dot with rainbow stripes
+#ifdef PBL_COLOR
+      static const uint8_t bands[6] = { GColorRedARGB8, GColorOrangeARGB8, GColorYellowARGB8,
+                                        GColorGreenARGB8, GColorBlueMoonARGB8, GColorPurpleARGB8 };
+#endif
+      GPoint c0 = P(20, 20);
+      int R = S(14);
+      graphics_context_set_stroke_width(ctx, 1);
+      for (int dy = -R; dy <= R; dy++) {
+        int hw = 0;
+        while ((hw + 1) * (hw + 1) + dy * dy <= R * R) hw++;
+        int band = (dy + R) * 6 / (2 * R + 1);
+#ifdef PBL_COLOR
+        graphics_context_set_stroke_color(ctx, (GColor){ .argb = bands[band] });
+#else
+        graphics_context_set_stroke_color(ctx, (band & 1) ? GColorWhite : GColorBlack);
+#endif
+        graphics_draw_line(ctx, GPoint(c0.x - hw, c0.y + dy), GPoint(c0.x + hw, c0.y + dy));
+      }
+      graphics_context_set_stroke_color(ctx, fg);
+      graphics_draw_circle(ctx, c0, R);
+      break;
+    }
+#if !PM_LOWMEM
+    case ICON_POI_NAMES: {
+      // a tiny name pill: dot + "A"
+      GPoint a = P(1, 9), b = P(39, 31);
+      GRect r = GRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      graphics_context_set_fill_color(ctx, GColorWhite);
+      graphics_fill_rect(ctx, r, r.size.h / 2, GCornersAll);
+      graphics_context_set_stroke_color(ctx, fg);
+      graphics_context_set_stroke_width(ctx, 1);
+      graphics_draw_round_rect(ctx, r, r.size.h / 2);
+      graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorOrange, GColorBlack));
+      circle(ctx, 11, 20, 5, true);
+      graphics_context_set_text_color(ctx, fg);
+      GPoint t = P(19, 9);
+      graphics_draw_text(ctx, "A", F(FONT_KEY_GOTHIC_14_BOLD), GRect(t.x, t.y - 4, S(18), 18),
+                         GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+      break;
+    }
+#endif
     case ICON_VOL_DOWN: {
       static const int8_t spk2[] = {2, 14, 9, 14, 18, 6, 18, 34, 9, 26, 2, 26};
       poly(ctx, spk2, 6, true);
@@ -784,6 +835,34 @@ void draw_poi(GContext *ctx, GPoint c, int cat) {
 #endif
 }
 
+#if !PM_LOWMEM
+GRect poi_label_rect(GPoint c, const char *name, bool left) {
+  int r = g_fonts.level >= 1 ? 5 : 4;
+  int tw = graphics_text_layout_get_content_size(name, g_fonts.chip, GRect(0, 0, 120, 16),
+                                                 GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft).w;
+  int w = 2 * r + 6 + tw + 4;
+  return GRect(left ? c.x + r + 3 - w : c.x - r - 3, c.y - 7, w, 15);
+}
+
+void draw_poi_label(GContext *ctx, GPoint c, int cat, const char *name, GRect pill) {
+  bool dark = g_app.dark_map;
+  graphics_context_set_fill_color(ctx, dark ? GColorBlack : GColorWhite);
+  graphics_fill_rect(ctx, pill, pill.size.h / 2, GCornersAll);
+  graphics_context_set_stroke_color(ctx, dark ? PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite) : C_DIVIDER);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_round_rect(ctx, pill, pill.size.h / 2);
+  int r = g_fonts.level >= 1 ? 5 : 4;
+  graphics_context_set_fill_color(ctx, poi_color(cat));
+  graphics_fill_circle(ctx, c, r);
+  graphics_context_set_text_color(ctx, dark ? GColorWhite : GColorBlack);
+  bool left = c.x > pill.origin.x + pill.size.w / 2;   // the name sits on the dot's left
+  int tx = left ? pill.origin.x + 4 : c.x + r + 3;
+  graphics_draw_text(ctx, name, g_fonts.chip, GRect(tx, pill.origin.y - 3, pill.size.w - 2 * r - 6, 16),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
+#endif
+
 void draw_compass(GContext *ctx, GPoint cc, int map_heading) {
 #ifdef PBL_COLOR
   graphics_context_set_antialiased(ctx, true);
@@ -823,9 +902,11 @@ void draw_card(GContext *ctx, GRect r, int radius) {
 }
 
 void draw_map_placeholder(GContext *ctx, GRect r) {
-  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorWhite, GColorWhite));
+  // a faint grid in the map's own background color (dark maps get a dark grid)
+  graphics_context_set_fill_color(ctx, g_app.dark_map ? PBL_IF_COLOR_ELSE(GColorOxfordBlue, GColorBlack) : GColorWhite);
   graphics_fill_rect(ctx, r, 0, GCornerNone);
-  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
+  graphics_context_set_stroke_color(ctx, g_app.dark_map ? PBL_IF_COLOR_ELSE(GColorDukeBlue, GColorWhite)
+                                                       : PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
   graphics_context_set_stroke_width(ctx, 1);
   for (int x = r.origin.x + 12; x < r.origin.x + r.size.w; x += 24) {
     for (int y = r.origin.y; y < r.origin.y + r.size.h; y += PBL_IF_COLOR_ELSE(1, 3)) {

@@ -16,9 +16,10 @@ static bool s_hello_sent;
 static AppTimer *s_hello_timer;
 static int s_hello_tries;
 static char s_status[64] = "Connecting to phone";
-static bool s_drive;          // driving mode: the map turns with you, you near the bottom
-static GPoint s_compass;
-#define PERSIST_DRIVE 5
+// Places on the map: off, dots, or dots with names (button in the map controls)
+enum { POIS_OFF = 0, POIS_DOTS, POIS_NAMES };
+static int s_pois = POIS_DOTS;
+#define PERSIST_POIS 6
 
 Window *home_window_get(void) { return s_window; }
 
@@ -51,7 +52,7 @@ static void send_hello(void) {
 // restore = keep the last view the user moved to (when coming back to this screen)
 static void request_map(bool restore) {
   GRect f = map_frame(layer_get_bounds(window_get_root_layer(s_window)));
-  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, (restore ? 1 : 0) | (s_drive ? 2 : 0));
+  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, (restore ? 1 : 0) | (s_pois << 2));
   s_map_requested = true;
   strncpy(s_status, "Finding you", sizeof(s_status));
   dots_layer_set_running(s_dots, true);
@@ -142,14 +143,10 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
 
-  // Driving mode: a compass shows where north is (tap it for north up)
-  if (s_drive && g_map.bmp) {
-#ifdef PBL_ROUND
-    s_compass = GPoint(mf.size.w / 2 + 10, b.size.h / 9 + g_fonts.small_h + 26);
-#else
-    s_compass = GPoint(18, g_fonts.small_h + 34);
-#endif
-    draw_compass(ctx, s_compass, g_map.rheading);
+  // Driving mode (map turned to your direction): a compass shows where north is
+  if (g_map.bmp && g_map.rheading) {
+    draw_compass(ctx, PBL_IF_ROUND_ELSE(GPoint(mf.size.w / 2 + 10, b.size.h / 9 + g_fonts.small_h + 26),
+                                        GPoint(18, g_fonts.small_h + 34)), g_map.rheading);
   }
 
   // Status bubble
@@ -252,27 +249,29 @@ static void start_search(void) {
 }
 
 // --- Map controls ------------------------------------------------------------
-static void toggle_drive(void) {
-  s_drive = !s_drive;
-  persist_write_bool(PERSIST_DRIVE, s_drive);
-  s_bar.extra2_up_color = s_drive ? C_BLUE : C_ICON;
+static IconId pois_icon(void) {
+  return s_pois == POIS_OFF ? ICON_POI_OFF : (s_pois == POIS_DOTS ? ICON_POI_DOTS : ICON_POI_NAMES);
+}
+
+// Places on the map: dots -> names -> off -> dots ...
+static void cycle_pois(void) {
+  s_pois = PM_LOWMEM ? (s_pois == POIS_OFF ? POIS_DOTS : POIS_OFF) : (s_pois + 1) % 3;   // names need more memory
+  persist_write_int(PERSIST_POIS, s_pois);
+  s_bar.extra_down = pois_icon();
   OutMsg m;
-  comm_msg_init(&m, CMD_HOME_DRIVE);
-  m.idx = s_drive ? 1 : 0;
+  comm_msg_init(&m, CMD_POI_MODE);
+  m.idx = s_pois;
   m.seq = g_map.seq;
   comm_send(&m);
-  ui_toast(s_window, s_drive ? "Driving mode: map turns with you" : "North up");
+  ui_toast(s_window, s_pois == POIS_OFF ? "Places: off" : (s_pois == POIS_DOTS ? "Places: dots" : "Places: names"));
   layer_mark_dirty(s_canvas);
 }
 
 static void bar_cb(MapBarEvent ev, void *ctx) {
-  if (ev == MB_EV_EXTRA2_UP) {
-    toggle_drive();
-  } else if (ev == MB_EV_EXTRA_UP) {
+  if (ev == MB_EV_EXTRA_UP) {
     map_adjust(ADJ_RESET, 0, 0);
   } else if (ev == MB_EV_EXTRA_DOWN) {
-    mapbar_close(&s_bar);
-    list_window_push(LW_FAVS, 0);
+    cycle_pois();
   }
   layer_mark_dirty(s_canvas);
 }
@@ -330,11 +329,6 @@ static void touch_cb(const TouchEvent *e, void *ctx) {
 
 static void map_tap(GPoint p, void *ctx) {
   if (!g_app.configured) { show_setup(); return; }
-  int dx = p.x - s_compass.x, dy = p.y - s_compass.y;
-  if (s_drive && g_map.bmp && dx * dx + dy * dy <= 18 * 18) {
-    toggle_drive();
-    return;
-  }
   bool in_pill = !s_bar.open && p.y < g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0);
   if (!in_pill) {
     // a place on the map: its photos, hours and reviews
@@ -362,12 +356,10 @@ static void window_load(Window *window) {
   s_dots = dots_layer_create(GRect(0, mf.size.h / 2 - 20, mf.size.w, 40));
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
-  mapbar_init(&s_bar, s_canvas, mf.size, ICON_MYLOC, ICON_STAR, bar_cb, NULL);
+  if (persist_exists(PERSIST_POIS)) s_pois = clampi(persist_read_int(PERSIST_POIS), 0, 2);
+  mapbar_init(&s_bar, s_canvas, mf.size, ICON_MYLOC, pois_icon(), bar_cb, NULL);
   s_bar.extra_up_color = C_BLUE;
-  s_bar.extra_down_color = C_STAR;
-  s_drive = persist_exists(PERSIST_DRIVE) && persist_read_bool(PERSIST_DRIVE);
-  s_bar.extra2_up = ICON_CAR;
-  s_bar.extra2_up_color = s_drive ? C_BLUE : C_ICON;
+  s_bar.extra_down_color = C_ICON;
   maptouch_init(&s_touch, mf, map_tap, NULL, &s_bar);
 }
 

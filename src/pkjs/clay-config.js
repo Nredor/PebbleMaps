@@ -86,10 +86,26 @@ function config() {
         },
         {
           type: 'toggle',
-          messageKey: 'showPois',
-          label: 'Show places on the map',
-          description: 'Restaurants, shops, parks and more appear as small colored dots when you zoom in. ' +
-            'On Pebble Time 2 and Round 2, tap one for photos, hours and reviews.',
+          messageKey: 'driveMode',
+          label: 'Driving mode',
+          description: 'The main map turns with you and keeps you near the bottom, like the Google Maps app. ' +
+            'Off: north is always up.',
+          defaultValue: false
+        },
+        {
+          type: 'toggle',
+          messageKey: 'drivePois',
+          id: 'drivePois',
+          label: 'Places in driving mode',
+          description: 'Show restaurants, shops, parks and more as small colored dots while in driving mode.',
+          defaultValue: true
+        },
+        {
+          type: 'toggle',
+          messageKey: 'driveNames',
+          id: 'driveNames',
+          label: 'Place names in driving mode',
+          description: 'Label those places with their names.',
           defaultValue: true
         },
         { type: 'heading', defaultValue: 'Display', size: 4 },
@@ -133,8 +149,9 @@ function config() {
             'Press Select (⋯) to switch to up/down, then left/right, then extra options. ' +
             'It goes back to normal after 5 seconds. On Pebble Time 2, drag the map with your finger, ' +
             'double-tap to zoom in, or press and hold to zoom out.<br><br>' +
-            '<strong>Driving mode:</strong> on the main map, open the map controls (Up) and press Select (⋯) until you see ' +
-            'the car, then press Up. The map turns with you and keeps you near the bottom. Press it again for north up.<br><br>' +
+            '<strong>Places on the map:</strong> open the map controls (Up) and press Select (⋯) until the last page. ' +
+            'The bottom button switches places between dots, dots with names, and off. ' +
+            'On Pebble Time 2 and Round 2, tap a place for photos, hours and reviews.<br><br>' +
             '<strong>Place info:</strong> on a place, press Down (<strong>i</strong>) for photos, hours and reviews. ' +
             'Select shows the next photo; hold Select for directions.<br><br>' +
             '<strong>Results:</strong> Up/Down moves between pins, Select opens the place. ' +
@@ -192,6 +209,13 @@ function customFn() {
     var ud = (clayConfig.meta && clayConfig.meta.userData) || {};
     var style = clayConfig.getItemById('mapStyle');
     if (style && ud.color === false) style.hide();
+    // "Place names" only matters when places are shown at all
+    var pois = clayConfig.getItemById('drivePois'), names = clayConfig.getItemById('driveNames');
+    if (pois && names) {
+      var sync = function () { if (pois.get()) names.enable(); else names.disable(); };
+      pois.on('change', sync);
+      sync();
+    }
   });
 }
 

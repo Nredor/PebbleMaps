@@ -552,6 +552,12 @@ void list_window_push(ListKind kind, int arg) {
   lw->next = s_all;
   s_all = lw;
   lw->window = window_create();
+  if (!lw->window) {   // out of memory: give up quietly
+    s_all = lw->next;
+    free(lw->items);
+    free(lw);
+    return;
+  }
   window_set_user_data(lw->window, lw);
   window_set_background_color(lw->window, C_BG);
   window_set_window_handlers(lw->window, (WindowHandlers){

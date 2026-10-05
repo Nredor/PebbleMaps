@@ -43,7 +43,8 @@ var simTimer = null;
 var gpsTimer = null;
 var currentMapSeq = 0;
 var mapVisible = false;   // a map screen (not navigation) is showing on the watch
-var homeDrive = false;    // home map: "driving mode" (turns with you, you near the bottom)
+var homeDrive = false;    // home map: "driving mode" (turns with you, you near the bottom) - a setting
+var poiMode = 1;          // places on the home map: 0 off, 1 dots, 2 dots with names (watch button)
 var DRIVE_AHEAD = 0.22;   // driving mode: how far below the middle your arrow sits (share of height)
 // Live location while a map is showing (off = battery saver: the spot when the map opened)
 var live = { on: false, watchId: null, simTimer: null, stopTimer: null, prev: null, heading: 0, moving: false, lastMove: 0, lastRender: 0 };
@@ -73,7 +74,7 @@ function sendStatus() {
     cmd: CMD.STATUS,
     num: google.hasKey() ? 1 : 0,
     mode: S.defaultMode,
-    flags: (S.imperial ? 1 : 0) | (S.vibrate ? 2 : 0) | ((S.textSize & 3) << 2)
+    flags: (S.imperial ? 1 : 0) | (S.vibrate ? 2 : 0) | ((S.textSize & 3) << 2) | (S.mapStyle === 'dark' ? 16 : 0)
   });
 }
 
@@ -187,14 +188,39 @@ function meMarker(v) {
   return markerFor(me, v, P.MK.ME);
 }
 
+// What the home map shows: the watch button's choice, limited in driving mode by the settings
+function placesShown() {
+  var m = watch.lowmem ? Math.min(poiMode, 1) : poiMode;   // Pebble Time / Time Round: dots only
+  if (homeDrive) {
+    if (!S.drivePois) return 0;
+    if (!S.driveNames) m = Math.min(m, 1);
+  }
+  return m;
+}
+
 function poiMarkers(v) {
-  if (!S.showPois || v.zoom < 15) return [];
+  var mode = placesShown();
+  if (!mode || v.zoom < 15) return [];
   var out = [];
   for (var i = 0; i < pois.length && out.length < 22; i++) {
     var m = markerFor([pois[i].lat, pois[i].lng], v, P.MK.POI + pois[i].cat, i);
-    if (m && m.x >= -8 && m.y >= -8 && m.x <= v.w + 8 && m.y <= v.h + 8) out.push(m);
+    if (m && m.x >= -8 && m.y >= -8 && m.x <= v.w + 8 && m.y <= v.h + 8) {
+      if (mode === 2) m.name = fmt.clip(plainText(pois[i].name), watch.lowmem ? 12 : 18).replace(/\x1e/g, ' ');
+      out.push(m);
+    }
   }
   return out;
+}
+
+// The markers message: positions, plus place names (in marker order) when shown
+function markersDict(seq, list) {
+  list = list.filter(Boolean).slice(0, 24);
+  var mk = encodeMarkers(list);
+  var names = list.filter(function (m) { return m.kind >= P.MK.POI; }).map(function (m) { return m.name || ''; });
+  var d = { cmd: CMD.MARKERS, seq: seq };
+  if (mk.length) d.data = mk;
+  if (names.some(Boolean)) d.list = names.join('\x1e');
+  return d;
 }
 
 function homeMarkers(v) {
@@ -203,13 +229,11 @@ function homeMarkers(v) {
 
 // Send just the markers for what the watch shows (your dot moving, places arriving)
 function sendMarkers(st, force) {
-  var mk = encodeMarkers(st.markers(st.view).filter(Boolean));
-  var key = mk.join(',');
+  var d = markersDict(st.seq, st.markers(st.view));
+  var key = (d.data || []).join(',') + (d.list || '');
   if (!force && key === lastMk) return;
   lastMk = key;
   msg.drop('mk');
-  var d = { cmd: CMD.MARKERS, seq: st.seq };
-  if (mk.length) d.data = mk;
   send(d, 'mk');
 }
 
@@ -370,10 +394,9 @@ function pushImage(seq, img, plan, info, markers, opts) {
     oneDone(ok);
   });
   if (markers) {
-    var mk = encodeMarkers(markers.filter(Boolean));
-    lastMk = mk.join(',');
-    if (mk.length) send({ cmd: CMD.MARKERS, seq: seq, data: mk }, 'map:' + seq);
-    else send({ cmd: CMD.MARKERS, seq: seq }, 'map:' + seq);
+    var md = markersDict(seq, markers);
+    lastMk = (md.data || []).join(',') + (md.list || '');
+    send(md, 'map:' + seq);
   }
   if (opts.onBegin) opts.onBegin();
   chunks.forEach(function (ch) {
@@ -508,7 +531,8 @@ function onHomeMap(p) {
   var size = clampSize(p.width, p.height);
   var zoom = p.idx > 0 ? p.idx : 15;
   var restore = ((p.mode || 0) & 1) === 1;
-  homeDrive = ((p.mode || 0) & 2) === 2;
+  homeDrive = !!S.driveMode;
+  poiMode = ((p.mode || 0) >> 2) & 3;
   setMapVisible(true);
   getLocation(20000, function (err, loc) {
     if (err) return sendError(err);
@@ -670,7 +694,7 @@ function rebuildPois(v) {
 }
 
 function maybeFetchPois(v) {
-  if (!S.showPois || v.zoom < 15 || !google.hasKey()) { pois = []; return; }
+  if (!placesShown() || v.zoom < 15 || !google.hasKey()) return;
   rebuildPois(v);
   var cell = poiCell(v);
   var key = cell.join(':');
@@ -1527,15 +1551,13 @@ function onMessage(e) {
       case CMD.CANCEL: setMapVisible(false); break;
       case CMD.INFO: onInfo(p); break;
       case CMD.PHOTO: onPhoto(p); break;
-      case CMD.HOME_DRIVE: {
-        homeDrive = p.idx === 1;
+      case CMD.POI_MODE: {
+        poiMode = p.idx || 0;
         var hs = views.home;
         if (hs && lastKind === 'home' && hs.markers) {
           if (p.seq !== undefined) hs.seq = p.seq;
-          hs.follow = true;
-          hs.view = followView(hs.view);
-          streamMap(hs.seq, hs.view, hs.markers(hs.view));
           maybeFetchPois(hs.view);
+          sendMarkers(hs, true);
         }
         break;
       }
@@ -1627,9 +1649,20 @@ Pebble.addEventListener('webviewclosed', function (e) {
   tiles.clear();
   route = null;
   sendStatus();
-  if (!S.showPois) { pois = []; poiCache = {}; }
   updateTracking();
-  if (views.home && lastKind === 'home' && mapVisible) sendMarkers(views.home);
+  var hs = views.home;
+  if (hs && lastKind === 'home' && mapVisible && hs.markers) {
+    if (homeDrive !== !!S.driveMode) {
+      // driving mode switched on or off in Settings: redraw the map that way
+      homeDrive = !!S.driveMode;
+      hs.follow = true;
+      hs.view = followView(hs.view);
+      streamMap(hs.seq, hs.view, hs.markers(hs.view));
+    } else {
+      sendMarkers(hs, true);
+    }
+    maybeFetchPois(hs.view);
+  }
   if (google.hasKey() && S.apiKey !== oldKey) {
     toast('Checking your key...');
     google.checkKey(me, function (res) {

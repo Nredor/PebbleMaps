@@ -143,6 +143,7 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
         int flags = tuple_int(it, MESSAGE_KEY_flags, 0);
         g_app.imperial = flags & 1;
         g_app.vibrate = (flags & 2) != 0;
+        g_app.dark_map = PBL_IF_COLOR_ELSE((flags & 16) != 0, false);
         int lvl = (flags >> 2) & 3;
         if (lvl != g_fonts.level || lvl == 3) ui_save_text_level(lvl);
       }
@@ -183,7 +184,7 @@ void comm_init(void) {
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
   uint32_t in_max = app_message_inbox_size_maximum();
-  uint32_t cap = PM_LOWMEM ? 1536 : 2048;  // 64 KB watches: memory is tight
+  uint32_t cap = PM_LOWMEM ? 1280 : 2048;  // 64 KB watches: memory is tight
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
   cap = 8192;
 #endif
