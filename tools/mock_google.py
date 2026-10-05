@@ -7,6 +7,9 @@ PNGs styled like the app's "light" style so map/marker alignment can be
 checked visually.
 
 Use it by setting the API key to:  test:http://127.0.0.1:8765
+
+Real maps for screenshots: pass an OpenStreetMap extract (see tools/osm_world.py):
+    python3 tools/mock_google.py 8765 --osm city.osm.pbf --center 52.0929,5.1183 --city Utrecht
 """
 import io
 import json
@@ -17,18 +20,69 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PIL import Image, ImageDraw, ImageFont
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+ARGS = sys.argv[1:]
+PORT = int(ARGS[0]) if ARGS and ARGS[0].isdigit() else 8765
+
+
+def _arg(name, default=None):
+    return ARGS[ARGS.index(name) + 1] if name in ARGS and ARGS.index(name) + 1 < len(ARGS) else default
+
+
+WORLD = None
+REPLAY = None
+if _arg("--replay"):
+    sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+    import replay_world
+    REPLAY = replay_world.Replay(_arg("--replay"))
+    sys.stderr.write("Replay: %d map pictures, home %s\n" % (len(REPLAY.tiles), REPLAY.home))
+if _arg("--osm"):
+    sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+    import osm_world
+    _c = [float(v) for v in _arg("--center", "52.0907,5.1214").split(",")]
+    WORLD = osm_world.World(_arg("--osm"), _c, float(_arg("--radius", "3")), _arg("--city", ""))
+    sys.stderr.write("OSM: %d roads, %d places\n" % (len(WORLD.roads), len(WORLD.pois)))
+
+
+def world_map(q):
+    w, h = map(int, q["size"][0].split("x"))
+    center = [float(v) for v in q["center"][0].split(",")]
+    styles = " ".join(q.get("style", []))
+    style = "dark" if "0x000055" in styles else ("bw" if "road.local|element:geometry.fill|color:0x000000" in styles else "light")
+    paths = []
+    for p in q.get("path", []):
+        parts = dict(kv.split(":", 1) for kv in p.split("|") if ":" in kv and not kv.startswith("enc"))
+        enc = p.split("enc:", 1)[1] if "enc:" in p else ""
+        c = parts.get("color", "0x0055ffff")[2:8]
+        paths.append({"pts": decode(enc), "weight": int(parts.get("weight", 5)),
+                      "color": tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))})
+    markers = []
+    for m in q.get("markers", []):
+        loc = m.split("|")[-1]
+        try:
+            markers.append(tuple(float(v) for v in loc.split(",")))
+        except ValueError:
+            pass
+    src = REPLAY or WORLD
+    return src.render(center, int(q["zoom"][0]), w, h, style, paths, markers)
+
+
+def _center(body, key="locationBias"):
+    try:
+        c = body[key]["circle"]["center"]
+        return (c["latitude"], c["longitude"])
+    except (KeyError, TypeError):
+        return tuple(WORLD.center)
 
 PLACES = [
-    ("Northtown Library", "Library", 47.6850, -117.4080),
-    ("Riverside Coffee Roasters", "Coffee shop", 47.6601, -117.4237),
-    ("Lilac City Library", "Library", 47.6565, -117.4290),
-    ("Falls Park", "Park", 47.6620, -117.4300),
-    ("Monroe St Diner", "Restaurant", 47.6575, -117.4205),
-    ("Garden Market", "Grocery store", 47.6545, -117.4250),
-    ("Corner Pharmacy", "Pharmacy", 47.6610, -117.4185),
-    ("Downtown Transit Center", "Bus station", 47.6582, -117.4268),
-    ("Northside Fuel", "Gas station", 47.6640, -117.4220),
+    ("North Branch Library", "Library", 40.0262, -99.9820),
+    ("Riverside Coffee Roasters", "Coffee shop", 40.0013, -99.9977),
+    ("Central Library", "Library", 39.9977, -100.0030),
+    ("River Park", "Park", 40.0032, -100.0040),
+    ("Main St Diner", "Restaurant", 39.9987, -99.9945),
+    ("Garden Market", "Grocery store", 39.9957, -99.9990),
+    ("Corner Pharmacy", "Pharmacy", 40.0022, -99.9925),
+    ("Downtown Transit Center", "Bus station", 39.9994, -100.0008),
+    ("Northside Fuel", "Gas station", 40.0052, -99.9960),
 ]
 
 
@@ -82,7 +136,7 @@ def place_json(p):
     return {
         "id": "mock-" + name.replace(" ", "-").lower(),
         "displayName": {"text": name, "languageCode": "en"},
-        "formattedAddress": "%d W Main Ave, Spokane, WA 99201, USA" % (100 + abs(hash(name)) % 900),
+        "formattedAddress": "%d W Main Ave, Springfield, USA" % (100 + abs(hash(name)) % 900),
         "shortFormattedAddress": "%d W Main Ave" % (100 + abs(hash(name)) % 900),
         "location": {"latitude": lat, "longitude": lng},
         "primaryTypeDisplayName": {"text": typ, "languageCode": "en"},
@@ -113,26 +167,26 @@ def make_route(o, d, mode):
     steps = [
         {"distanceMeters": dist(s1), "staticDuration": "%ds" % (dist(s1) / speed),
          "polyline": {"encodedPolyline": encode(s1)},
-         "navigationInstruction": {"maneuver": "DEPART", "instructions": "Head %s on N Monroe St" % ("north" if north else "south")},
+         "navigationInstruction": {"maneuver": "DEPART", "instructions": "Head %s on N Oak St" % ("north" if north else "south")},
          "travelMode": mode},
         {"distanceMeters": dist(s2), "staticDuration": "%ds" % (dist(s2) / speed),
          "polyline": {"encodedPolyline": encode(s2)},
          "navigationInstruction": {"maneuver": "TURN_RIGHT" if (north == east) else "TURN_LEFT",
-                                   "instructions": "Turn %s onto W Riverside Ave" % ("right" if (north == east) else "left")},
+                                   "instructions": "Turn %s onto W River Ave" % ("right" if (north == east) else "left")},
          "travelMode": mode},
         {"distanceMeters": dist(s3), "staticDuration": "%ds" % (dist(s3) / speed),
          "polyline": {"encodedPolyline": encode(s3)},
-         "navigationInstruction": {"maneuver": "TURN_SLIGHT_LEFT", "instructions": "Slight left to stay on W Riverside Ave. Destination will be on the right"},
+         "navigationInstruction": {"maneuver": "TURN_SLIGHT_LEFT", "instructions": "Slight left to stay on W River Ave. Destination will be on the right"},
          "travelMode": mode},
     ]
     if mode == "TRANSIT":
         steps[1]["travelMode"] = "TRANSIT"
         steps[1]["navigationInstruction"] = {"instructions": "Bus towards Downtown"}
         steps[1]["transitDetails"] = {
-            "stopDetails": {"departureStop": {"name": "Monroe & Main"}, "arrivalStop": {"name": "Riverside & Post"}},
+            "stopDetails": {"departureStop": {"name": "Oak & Main"}, "arrivalStop": {"name": "River & 1st"}},
             "localizedValues": {"departureTime": {"time": {"text": "3:12 PM"}}, "arrivalTime": {"time": {"text": "3:20 PM"}}},
             "headsign": "Downtown", "stopCount": 4,
-            "transitLine": {"nameShort": "25", "name": "Division", "vehicle": {"type": "BUS", "name": {"text": "Bus"}}},
+            "transitLine": {"nameShort": "25", "name": "Crosstown", "vehicle": {"type": "BUS", "name": {"text": "Bus"}}},
         }
     pts = s1 + s2[1:] + s3[1:]
     total = sum(s["distanceMeters"] for s in steps)
@@ -141,7 +195,7 @@ def make_route(o, d, mode):
         "distanceMeters": total,
         "duration": "%ds" % int(static * (1.2 if mode == "DRIVE" else 1)),
         "staticDuration": "%ds" % static,
-        "description": "N Monroe St" if mode == "DRIVE" else "",
+        "description": "N Oak St" if mode == "DRIVE" else "",
         "polyline": {"encodedPolyline": encode(pts)},
         "legs": [{"steps": steps}],
     }
@@ -161,8 +215,8 @@ def render_map(q):
         return (x - cx + w / 2, y - cy + h / 2)
 
     # park and river
-    dr.polygon([px(47.6635, -117.4330), px(47.6635, -117.4280), px(47.6605, -117.4280), px(47.6605, -117.4330)], fill=(170, 255, 170))
-    river = [px(47.6630 + 0.0012 * math.sin(i / 3), -117.45 + i * 0.002) for i in range(40)]
+    dr.polygon([px(40.0047, -100.0070), px(40.0047, -100.0020), px(40.0017, -100.0020), px(40.0017, -100.0070)], fill=(170, 255, 170))
+    river = [px(40.0042 + 0.0012 * math.sin(i / 3), -100.0240 + i * 0.002) for i in range(40)]
     dr.line(river, fill=(85, 170, 255), width=max(3, int(2 ** (z - 13))))
     # street grid every 0.0025 deg
     step = 0.0025
@@ -206,12 +260,26 @@ class H(BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         if u.path.endswith("/staticmap"):
-            return self.send(200, render_map(q), "image/png")
+            return self.send(200, world_map(q) if (WORLD or REPLAY) else render_map(q), "image/png")
+        if REPLAY and "/places/" in u.path:
+            p = REPLAY.place(urllib.parse.unquote(u.path.rsplit("/", 1)[1]))
+            return self.send(200, p) if p else self.send(404, {"error": {"message": "not found"}})
+        if REPLAY and u.path.endswith("/geocode/json"):
+            h = REPLAY.home
+            return self.send(200, {"status": "OK", "results": [{"formatted_address": "Seattle, WA", "place_id": "here",
+                                                                 "geometry": {"location": {"lat": h[0], "lng": h[1]}}}]})
+        if WORLD and "/places/" in u.path:
+            p = WORLD.by_id(urllib.parse.unquote(u.path.rsplit("/", 1)[1]))
+            return self.send(200, WORLD.place_json(p)) if p else self.send(404, {"error": {"message": "not found"}})
+        if WORLD and u.path.endswith("/geocode/json"):
+            c = WORLD.center
+            return self.send(200, {"status": "OK", "results": [{"formatted_address": WORLD.city, "place_id": "osm-here",
+                                                                 "geometry": {"location": {"lat": c[0], "lng": c[1]}}}]})
         if u.path.endswith("/geocode/json"):
             if "latlng" in q:
-                return self.send(200, {"status": "OK", "results": [{"formatted_address": "421 W Riverside Ave, Spokane, WA 99201, USA", "place_id": "mock-here"}]})
-            return self.send(200, {"status": "OK", "results": [{"formatted_address": q["address"][0] + ", Spokane, WA", "place_id": "mock-geo",
-                                                                 "geometry": {"location": {"lat": 47.6512, "lng": -117.4145}}}]})
+                return self.send(200, {"status": "OK", "results": [{"formatted_address": "421 W River Ave, Springfield, USA", "place_id": "mock-here"}]})
+            return self.send(200, {"status": "OK", "results": [{"formatted_address": q["address"][0] + ", Springfield", "place_id": "mock-geo",
+                                                                 "geometry": {"location": {"lat": 39.9924, "lng": -99.9885}}}]})
         if "/places/" in u.path:
             pid = urllib.parse.unquote(u.path.rsplit("/", 1)[1])
             for p in PLACES:
@@ -222,6 +290,42 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
+        if REPLAY:
+            if self.path.endswith("places:searchText"):
+                return self.send(200, REPLAY.search())
+            if self.path.endswith("places:searchNearby"):
+                return self.send(200, REPLAY.nearby())
+            if self.path.endswith("places:autocomplete"):
+                return self.send(200, REPLAY.autocomplete())
+            if self.path.endswith("computeRoutes"):
+                full = "legs" in (self.headers.get("X-Goog-FieldMask") or "")
+                return self.send(200, REPLAY.route(body.get("travelMode", "DRIVE"), full))
+        if WORLD and self.path.endswith("places:searchText"):
+            res = WORLD.search_text(body.get("textQuery", ""), _center(body))
+            return self.send(200, {"places": [WORLD.place_json(p) for p in res]})
+        if WORLD and self.path.endswith("places:searchNearby"):
+            c = body["locationRestriction"]["circle"]
+            res = WORLD.search_nearby(body.get("includedTypes", []), (c["center"]["latitude"], c["center"]["longitude"]), c["radius"])
+            return self.send(200, {"places": [WORLD.place_json(p) for p in res]})
+        if WORLD and self.path.endswith("places:autocomplete"):
+            o = _center(body, "origin") if "origin" in body else tuple(WORLD.center)
+            if "origin" in body:
+                o = (body["origin"]["latitude"], body["origin"]["longitude"])
+            out = []
+            for p in WORLD.autocomplete(body.get("input", ""), o):
+                pj = WORLD.place_json(p)
+                out.append({"placePrediction": {"placeId": p["id"], "structuredFormat": {
+                    "mainText": {"text": p["name"]}, "secondaryText": {"text": pj["formattedAddress"]}},
+                    "distanceMeters": int(osm_world.haversine(o, (p["lat"], p["lng"])))}})
+            return self.send(200, {"suggestions": out})
+        if WORLD and self.path.endswith("computeRoutes"):
+            o = body["origin"]["location"]["latLng"]
+            dd = body["destination"].get("location", {}).get("latLng")
+            if not dd:
+                p = WORLD.by_id(body["destination"].get("placeId", ""))
+                dd = {"latitude": p["lat"], "longitude": p["lng"]} if p else {"latitude": WORLD.center[0], "longitude": WORLD.center[1]}
+            r = WORLD.route((o["latitude"], o["longitude"]), (dd["latitude"], dd["longitude"]), body.get("travelMode", "DRIVE"))
+            return self.send(200, r or {})
         if self.path.endswith("places:searchText"):
             text = body.get("textQuery", "").lower()
             res = [p for p in PLACES if any(w in p[0].lower() or w in p[1].lower() for w in text.split())] or PLACES[:5]
@@ -241,13 +345,13 @@ class H(BaseHTTPRequestHandler):
             res = [p for p in PLACES if p[0].lower().startswith(text) or any(w.startswith(text) for w in p[0].lower().split())]
             return self.send(200, {"suggestions": [{"placePrediction": {
                 "placeId": "mock-" + p[0].lower().replace(" ", "-"),
-                "structuredFormat": {"mainText": {"text": p[0]}, "secondaryText": {"text": "W Main Ave, Spokane, WA"}},
+                "structuredFormat": {"mainText": {"text": p[0]}, "secondaryText": {"text": "W Main Ave, Springfield"}},
                 "distanceMeters": 400 + 300 * i}} for i, p in enumerate(res[:5])]})
         if self.path.endswith("places:searchNearby"):
             return self.send(200, {"places": [place_json(p) for p in PLACES[:6]]})
         if self.path.endswith("computeRoutes"):
             o = body["origin"]["location"]["latLng"]
-            dd = body["destination"].get("location", {}).get("latLng", {"latitude": 47.6512, "longitude": -117.4145})
+            dd = body["destination"].get("location", {}).get("latLng", {"latitude": 39.9924, "longitude": -99.9885})
             if body.get("travelMode") == "BICYCLE" and "summary-nobike" in self.path:
                 return self.send(200, {})
             return self.send(200, make_route((o["latitude"], o["longitude"]), (dd["latitude"], dd["longitude"]), body.get("travelMode", "DRIVE")))

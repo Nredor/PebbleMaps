@@ -220,6 +220,13 @@ static void dictation_cb(DictationSession *session, DictationSessionStatus statu
 
 static void start_search(void) {
   if (!g_app.configured) { show_setup(); return; }
+#ifdef SHOT_TEST
+#if KEYBOARD_AVAILABLE
+  open_keyboard(); return;  // TEST ONLY
+#else
+  results_window_push_search("Starbucks"); return;  // TEST ONLY
+#endif
+#endif
 #if defined(PBL_MICROPHONE)
   if (!s_dictation) s_dictation = dictation_session_create(160, dictation_cb, NULL);
   if (s_dictation) {

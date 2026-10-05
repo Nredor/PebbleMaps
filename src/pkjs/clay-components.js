@@ -160,7 +160,7 @@ module.exports = [
         var item = clay.getItemByMessageKey('apiKey');
         function refresh() {
           var v = item ? String(item.get() || '').trim() : '';
-          jump.style.display = v ? 'none' : 'block';
+          jump.style.display = (v || window.pmSetupFirst) ? 'none' : 'block';
         }
         if (item) {
           item.on('change', refresh);
@@ -291,8 +291,8 @@ module.exports = [
       '</div></details>',
 
       // Step 7
-      '<details class="pm-step" data-step="7" open><summary><span class="n">7</span><span class="t">Paste your key above</span><span class="chev">›</span></summary>',
-      '<div class="body">Tap the <b>Google Maps key</b> box just above these steps, paste your key, then tap <b>Save settings</b> at the bottom. ',
+      '<details class="pm-step" data-step="7" open><summary><span class="n">7</span><span class="t">Paste your key</span><span class="chev">›</span></summary>',
+      '<div class="body">Tap the <b>Google Maps key</b> box (with these steps), paste your key, then tap <b>Save settings</b> at the bottom. ',
       'A map preview appears when the key works, and your watch will say <b>"Your Google key works!"</b></div></details>',
 
       '<div class="pm-free"><b>What\'s free?</b> Every month Google includes about 10,000 map pictures, 5,000 place searches and 5,000–10,000 route lookups at no charge. ',
@@ -321,6 +321,29 @@ module.exports = [
         var has = item && String(item.get() || '').trim();
         setCollapsed(!!has);
         root.querySelector('.pm-hide-row').style.display = has ? 'block' : 'none';
+        // Until setup is finished (every step ticked, or the key confirmed working),
+        // the guide and the key box come first; after that the everyday settings do.
+        var doneAll = true;
+        for (var k = 1; k <= 6; k++) if (!done[k]) doneAll = false;
+        var ud = (clay.meta && clay.meta.userData) || {};
+        var verified = !!has && !!ud.keyOk;   // the phone has used this key successfully
+        try { if (!!has && localStorage.getItem('pm-key-ok') === String(has)) verified = true; } catch (e) { /* no storage */ }
+        var setupFirst = !(doneAll || verified);
+        window.pmSetupFirst = setupFirst;
+        if (setupFirst) {
+          var guideSection = root.parentElement;
+          var keyArea = document.getElementById('pm-key-area');
+          var keySection = keyArea && keyArea.parentElement;
+          var hero = document.querySelector('.pm-hero');
+          var form = hero && hero.parentElement;
+          if (form && guideSection && keySection) {
+            form.insertBefore(guideSection, hero.nextSibling);
+            form.insertBefore(keySection, guideSection.nextSibling);
+          }
+          setCollapsed(false);
+        }
+        var jump = document.querySelector('.pm-jump');
+        if (jump && setupFirst) jump.style.display = 'none';
       });
       // Link rows. Links opened from here would load inside the Pebble app, where you aren't
       // signed in to Google, so we copy the address for you to paste into Chrome instead.
@@ -490,6 +513,7 @@ module.exports = [
         img.onload = function () {
           box.style.display = 'block';
           show('ok', '✓ It works! Google sent a map with your key. Tap Save settings below.');
+          try { localStorage.setItem('pm-key-ok', key); } catch (e) { /* private mode */ }
           fire('pm-key-ok');
           testVoice(key);
         };

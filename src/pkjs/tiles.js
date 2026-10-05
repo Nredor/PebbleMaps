@@ -8,6 +8,7 @@
 var geo = require('./geo');
 var image = require('./image');
 var google = require('./google');
+var dev = require('./dev');
 
 var SIZE = 640;
 var MAX_TILES = 6;
@@ -48,6 +49,11 @@ function findTile(key, c, w, h, rotated) {
 
 // Fetch a tile centered on world point c. cb(err, tile)
 function fetchTile(o, key, c, cb) {
+  if (dev.snapTiles) {
+    // screenshot test mode: only ask for pictures on a fixed grid (prepared in advance)
+    var sn = dev.snapTiles;
+    c = [Math.round(c[0] / sn) * sn, Math.round(c[1] / sn) * sn];
+  }
   var id = key + '@' + Math.round(c[0]) + ',' + Math.round(c[1]);
   if (inflight[id]) { inflight[id].push(cb); return; }
   inflight[id] = [cb];
@@ -115,7 +121,7 @@ function get(o, cb) {
   if (t) return cb(null, render(t, c, o.w, o.h, o.heading, o.format));
   // o.ahead: [dx, dy] world pixels to center a new picture further along (navigation)
   var fc = c;
-  if (o.ahead) {
+  if (o.ahead && !dev.snapTiles) {
     var room = SIZE / 2 - (rotated ? Math.sqrt(o.w * o.w + o.h * o.h) : Math.max(o.w, o.h)) / 2 - 4;
     var len = Math.sqrt(o.ahead[0] * o.ahead[0] + o.ahead[1] * o.ahead[1]) || 1;
     var k = Math.max(0, room * 0.75) / len;

@@ -187,6 +187,7 @@ function retryLater(err) {
 
 function mapWorked() {
   retryCount = 0;
+  try { if (S.apiKey && localStorage.getItem('pm-key-works') !== S.apiKey) localStorage.setItem('pm-key-works', S.apiKey); } catch (e) { /* ignore */ }
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
 }
 
@@ -942,6 +943,7 @@ function startSimulation() {
     if (!navigator_) return;
     var r = navigator_.route;
     s += speed;
+    if (dev.simStopAt && s > dev.simStopAt) s = dev.simStopAt;   // test: park at a fixed spot
     var i = 0;
     while (i < r.cum.length - 2 && r.cum[i + 1] < s) i++;
     var segLen = Math.max(1, r.cum[i + 1] - r.cum[i]);
@@ -1131,7 +1133,8 @@ Pebble.addEventListener('showConfiguration', function () {
   clay.meta.userData = {
     lat: me ? me[0] : null,
     lng: me ? me[1] : null,
-    color: watch.fmt === 1
+    color: watch.fmt === 1,
+    keyOk: (function () { try { return !!S.apiKey && localStorage.getItem('pm-key-works') === S.apiKey; } catch (e) { return false; } })()
   };
   try {
     clay.meta.activeWatchInfo = Pebble.getActiveWatchInfo ? Pebble.getActiveWatchInfo() : null;

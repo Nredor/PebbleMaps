@@ -639,6 +639,10 @@ void keyboard_window_push(const char *placeholder, const char *action_label, con
   s_caps_lock = false;
   s_shift = true;        // capital first letter
   reset_press();
+#ifdef SHOT_TEST
+  strcpy(s_text, "sta"); s_shift = false;  // TEST ONLY
+  s_pause_timer = app_timer_register(KB_PAUSE_MS, pause_cb, NULL);  // TEST ONLY
+#endif
   s_placeholder = placeholder;
   s_action = action_label;
   memset(&s_hooks, 0, sizeof(s_hooks));
