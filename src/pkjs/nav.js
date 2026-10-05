@@ -121,7 +121,7 @@ function stepList(route, imperial) {
       sub = (s.transit.departs ? s.transit.departs + ' · ' : '') + s.transit.stops + ' stops';
       return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 120), sub: sub, icon: s.man };
     }
-    return { title: fmt.clip(s.instruction, 120), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
+    return { title: fmt.clip(s.instruction.split('\n')[0], 120), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
   });
 }
 

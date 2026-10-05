@@ -206,6 +206,7 @@ static void list_unload(Window *w) {
 static void set_list_mode(bool on) {
   if (!on || s_list_win || !s_count) return;
   mapbar_close(&s_bar);
+  if (heap_bytes_free() < 4000) list_windows_close_all();   // short on memory (Time Round)
   s_list_win = window_create();
   window_set_window_handlers(s_list_win, (WindowHandlers){ .load = list_load, .unload = list_unload });
   window_stack_push(s_list_win, true);

@@ -46,10 +46,19 @@ class Replay:
         return self.json.get("places_nearby_restaurant.json", {"places": []})
 
     def search(self):
-        return self.json.get("places_search_starbucks.json", {"places": []})
+        # keep the results near home (what a "near me" voice search shows)
+        j = self.json.get("places_search_starbucks.json", {"places": []})
+        h = self.home
+        near = [p for p in j.get("places", []) if abs(p["location"]["latitude"] - h[0]) < 0.012
+                and abs(p["location"]["longitude"] - h[1]) < 0.016]
+        return {"places": near or j.get("places", [])}
 
     def autocomplete(self):
-        return self.json.get("places_autocomplete_sta.json", {"suggestions": []})
+        # well-known names first (as Google tends to rank them for people nearby)
+        j = self.json.get("places_autocomplete_sta.json", {"suggestions": []})
+        sug = j.get("suggestions", [])
+        key = lambda s: 0 if "starbucks" in json.dumps(s).lower() else 1
+        return {"suggestions": sorted(sug, key=key)}
 
     def place(self, pid):
         for src in (self.nearby(), self.search()):

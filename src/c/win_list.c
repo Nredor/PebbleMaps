@@ -532,6 +532,15 @@ void list_windows_close_all(void) {
 }
 
 void list_window_push(ListKind kind, int arg) {
+  // short on memory (Pebble Time, Time Round): drop the lists underneath first
+  if (heap_bytes_free() < 4000) {
+    Window *top = window_stack_get_top_window();
+    for (ListWin *o = s_all, *nx; o; o = nx) {
+      nx = o->next;
+      if (o->window != top) window_stack_remove(o->window, false);
+    }
+    results_window_close();
+  }
   ListWin *lw = calloc(1, sizeof(ListWin));
   if (!lw) return;
   lw->kind = kind;

@@ -213,6 +213,7 @@ static void window_unload(Window *window) {
 
 void route_window_push(int mode) {
   if (s_window) window_stack_remove(s_window, false);
+  if (heap_bytes_free() < 4000) results_window_close();   // short on memory (Time, Time Round)
   s_mode = mode;
   s_loaded = false;
   s_window = window_create();
