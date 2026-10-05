@@ -3,6 +3,7 @@
 #include "mapdata.h"
 #include "voice.h"
 #include "ui.h"
+#include "windows.h"
 
 #define QUEUE_LEN (PM_LOWMEM ? 4 : 6)
 
@@ -144,6 +145,7 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
         g_app.imperial = flags & 1;
         g_app.vibrate = (flags & 2) != 0;
         g_app.dark_map = PBL_IF_COLOR_ELSE((flags & 16) != 0, false);
+        touch_prefs_apply((flags >> 5) & 3);
         int lvl = (flags >> 2) & 3;
         if (lvl != g_fonts.level || lvl == 3) ui_save_text_level(lvl);
       }

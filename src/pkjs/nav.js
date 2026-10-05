@@ -24,6 +24,11 @@ function vehicleIcon(type) {
   return P.MAN.BUS;
 }
 
+function latLngOf(stop) {
+  var l = stop && stop.location && stop.location.latLng;
+  return l ? [l.latitude, l.longitude] : null;
+}
+
 function transitInfo(td) {
   if (!td) return null;
   var line = td.transitLine || {};
@@ -41,6 +46,9 @@ function transitInfo(td) {
     from: (stops.departureStop && stops.departureStop.name) || '',
     to: (stops.arrivalStop && stops.arrivalStop.name) || '',
     departs: (lv.departureTime && lv.departureTime.time && lv.departureTime.time.text) || '',
+    // for the schedule page: where this ride starts and ends, and when
+    fromLoc: latLngOf(stops.departureStop), toLoc: latLngOf(stops.arrivalStop),
+    depTime: stops.departureTime || '', vehicleType: veh.type || '', agency: ((line.agencies || [])[0] || {}).name || '',
     arrives: (lv.arrivalTime && lv.arrivalTime.time && lv.arrivalTime.time.text) || ''
   };
 }
@@ -119,7 +127,7 @@ function stepList(route, imperial) {
     var sub = fmt.distance(s.meters || (s.endDist - s.startDist), imperial);
     if (s.transit) {
       sub = (s.transit.departs ? s.transit.departs + ' · ' : '') + s.transit.stops + ' stops';
-      return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 120), sub: sub, icon: s.man };
+      return { title: fmt.clip(s.instruction + (s.transit.from ? ' from ' + s.transit.from : ''), 120), sub: sub, icon: s.man, extra: 1 };
     }
     return { title: fmt.clip(s.instruction.split('\n')[0], 120), sub: sub, icon: i === 0 && s.man === P.MAN.STRAIGHT ? P.MAN.DEPART : s.man };
   });

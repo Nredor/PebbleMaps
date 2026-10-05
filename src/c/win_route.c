@@ -191,7 +191,7 @@ static void window_load(Window *window) {
 static void window_appear(Window *window) {
   comm_set_handler(handle, NULL);
   map_set_observer(s_canvas);
-  if (g_app.touch) touch_service_subscribe(touch_cb, NULL);
+  if (TOUCH_HW && g_app.touch) touch_service_subscribe(touch_cb, NULL);
   if (!s_loaded || !g_map.bmp) request();
 }
 
@@ -202,7 +202,7 @@ static void window_disappear(Window *window) {
   ui_toast_cancel();
   mapbar_deinit(&s_bar);
   maptouch_deinit(&s_touch);
-  if (g_app.touch) touch_service_unsubscribe();
+  if (g_app.touch_hw) touch_service_unsubscribe();
 }
 
 static void window_unload(Window *window) {

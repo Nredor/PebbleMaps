@@ -42,6 +42,20 @@ GColor map_cat_color(int cat) {
 #endif
 }
 
+// --- Touch: Settings can switch touch off, or ask for the button layout -------------
+// prefs: bit 0 = touch off, bit 1 = button layout
+void touch_prefs_apply(int prefs) {
+  bool off = prefs & 1;
+  g_app.touch = g_app.touch_hw && !off;
+  g_app.buttons_ui = !g_app.touch || (prefs & 2);
+#if TOUCH_HW
+  if (g_app.touch_hw) app_touch_navigation_enable(g_app.touch);
+#endif
+  if (!persist_exists(PERSIST_TOUCH_PREFS) || persist_read_int(PERSIST_TOUCH_PREFS) != prefs) {
+    persist_write_int(PERSIST_TOUCH_PREFS, prefs);
+  }
+}
+
 // --- Places on the main map: on/off, names, which kinds (kept on the watch) ------
 #define PERSIST_POI_PREFS 7
 void poi_prefs_load(void) {
@@ -135,8 +149,8 @@ static void init(void) {
 #else
   g_app.has_mic = true;
 #endif
-  g_app.touch = touch_service_is_enabled();
-  if (g_app.touch) app_touch_navigation_enable(true);
+  g_app.touch_hw = TOUCH_HW && touch_service_is_enabled();
+  touch_prefs_apply(persist_exists(PERSIST_TOUCH_PREFS) ? persist_read_int(PERSIST_TOUCH_PREFS) : 0);
   comm_init();
   poi_prefs_load();
   map_reserve();

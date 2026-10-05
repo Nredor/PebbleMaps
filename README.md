@@ -18,7 +18,7 @@ and Pebble Round 2.
 
 | Screen | Up | Select | Down |
 |---|---|---|---|
-| Map (home) | Map controls | Search by voice | Places & favorites |
+| Map (home) | Map controls (touch watches: gear) | Search by voice | Gear options (touch watches: Places) |
 | Results | Previous pin | Open place (hold: list) | Next pin |
 | Place | Save ☆ | Pick travel mode | Info (photos, hours, reviews) |
 | Info | Scroll | Next photo (hold: directions) | Scroll |
@@ -26,9 +26,9 @@ and Pebble Round 2.
 | Navigating | Steps | Menu | Alerts |
 
 Your location is live on the map (an arrow while you move); turn off Live location in
-Settings to save battery. On the last page of the map controls, the top button switches between driving mode
-(the map turns with you), north up and a plain map; the bottom button picks which places
-show on the map (and their names). Hold Up/Down on the home map to zoom. Press Back twice to stop
+Settings to save battery. The gear button opens options: heading up (the map turns with you), north up or a plain
+map; and which places show on the map (and their names). Transit rides in the directions
+list show the next departures (press Select on the blue i). Hold Up/Down on the home map to zoom. Press Back twice to stop
 navigating. On Pebble Time 2 and Round 2 you can also tap pins, places on the map and buttons.
 Pebble Time and Time Round show place info as text (no photos) and places as dots only, to save memory.
 

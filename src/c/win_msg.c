@@ -31,7 +31,6 @@ static void layout(MsgWin *mw);
 
 static void handle(int cmd, DictionaryIterator *it, void *ctx) {
   MsgWin *mw = ctx;
-#if PM_LOWMEM
   if (mw->info && cmd == CMD_INFO_DATA) {
     strncpy(mw->title_text, tuple_str(it, MESSAGE_KEY_text), sizeof(mw->title_text) - 1);
     const char *body = tuple_str(it, MESSAGE_KEY_list);
@@ -51,7 +50,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
     show_error(it);
     return;
   }
-#endif
+
   if (cmd == CMD_STATUS && mw->pop_on_configured && g_app.configured) {
     window_stack_remove(mw->window, true);
   }
@@ -151,19 +150,28 @@ void msg_window_push(IconId icon, const char *title, const char *body, bool pop_
   msg_show(mw);
 }
 
-#if PM_LOWMEM
-// Pebble Time / Time Round: the place info page as text (rating, hours, reviews)
-void info_window_push(int src, int idx, const char *title) {
-  if (heap_bytes_free() < 4000) list_windows_close_all();
-  MsgWin *mw = msg_create(ICON_INFO, title ? title : "", "Loading...");
+// A page whose text comes from the phone (transit schedules; place info on Pebble Time / Time Round)
+static void remote_page(IconId icon, const char *title, int cmd, int idx, int mode) {
+  MsgWin *mw = msg_create(icon, title ? title : "", "Loading...");
   if (!mw) return;
   mw->info = true;
   msg_show(mw);
   OutMsg m;
-  comm_msg_init(&m, CMD_INFO);
-  m.mode = src;
+  comm_msg_init(&m, cmd);
   m.idx = idx;
+  if (mode >= 0) m.mode = mode;
   comm_send(&m);
+}
+
+void text_page_push(IconId icon, const char *title, int cmd, int idx) {
+  remote_page(icon, title, cmd, idx, -1);
+}
+
+#if PM_LOWMEM
+// Pebble Time / Time Round: the place info page as text (rating, hours, reviews)
+void info_window_push(int src, int idx, const char *title) {
+  if (heap_bytes_free() < 4000) list_windows_close_all();
+  remote_page(ICON_INFO, title, CMD_INFO, idx, src);
 }
 #endif
 

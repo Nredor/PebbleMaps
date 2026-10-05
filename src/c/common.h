@@ -35,6 +35,7 @@ enum {
   CMD_PHOTO = 26,
   CMD_POI_MODE = 27,
   CMD_FOLLOW_MODE = 28,
+  CMD_TRANSIT_INFO = 29,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,
@@ -57,6 +58,13 @@ enum {
 #define PM_LOWMEM 1
 #else
 #define PM_LOWMEM 0
+#endif
+
+// Watches with a touch screen (Pebble Time 2, Round 2)
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+#define TOUCH_HW 1
+#else
+#define TOUCH_HW 0
 #endif
 
 // Travel modes
@@ -120,7 +128,9 @@ typedef struct {
   bool imperial;
   bool vibrate;
   bool has_mic;
-  bool touch;
+  bool touch;          // touch input on (watch has it, and it isn't switched off in Settings)
+  bool touch_hw;       // the watch has a touch screen
+  bool buttons_ui;     // button layout (no touch, or chosen in Settings)
   bool dark_map;       // dark map colors (color watches)
   bool pois_on;        // places drawn on the main map
   bool poi_names;      // ...with their names

@@ -395,13 +395,14 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
     tx = 6;
   }
   int tw = b.size.w - tx - 4;
+  if (lw->kind == LW_STEPS && lw->count && lw->items[i->row].extra) tw -= 12;
   if (lw->kind == LW_MAPPLACES) {
     draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), mp_on(i->row), hl, dim);
     tw -= 34;
   }
   int sub_h = sub ? g_fonts.small_h : 0;
   graphics_context_set_text_color(ctx, fg);
-  graphics_draw_text(ctx, title, g_fonts.body_b, GRect(tx, -2, tw - (badge ? 50 : 0), b.size.h - sub_h - 2),
+  graphics_draw_text(ctx, title, g_fonts.body_b, GRect(tx, -2, tw - (badge ? 62 : 0), b.size.h - sub_h - 2),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   if (sub) {
     graphics_context_set_text_color(ctx, sub_fg);
@@ -409,14 +410,19 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
   if (badge) {
-    GRect br = GRect(b.size.w - 50, 5, 46, 15);
+    // pill a little roomier than the word, so the rounded corners never clip it
+    int bw = graphics_text_layout_get_content_size("Default", g_fonts.chip, GRect(0, 0, 80, 20),
+                                                   GTextOverflowModeFill, GTextAlignmentLeft).w + 14;
+    GRect br = GRect(b.size.w - bw - 4, 4, bw, 18);
     graphics_context_set_fill_color(ctx, hl ? GColorWhite : C_BLUE);
-    graphics_fill_rect(ctx, br, 7, GCornersAll);
+    graphics_fill_rect(ctx, br, 9, GCornersAll);
     graphics_context_set_text_color(ctx, hl ? C_BLUE : GColorWhite);
-    graphics_draw_text(ctx, "Default", g_fonts.chip, GRect(br.origin.x, br.origin.y - 3, br.size.w, 16),
+    graphics_draw_text(ctx, "Default", g_fonts.chip, GRect(br.origin.x, br.origin.y - 2, br.size.w, 18),
                        GTextOverflowModeFill, GTextAlignmentCenter, NULL);
   }
 #endif
+  // transit steps: Select shows the schedule
+  if (lw->kind == LW_STEPS && lw->count && lw->items[i->row].extra) draw_info_tab(ctx, b, hl);
 }
 
 // --- Favorite options (ActionMenu) ----------------------------------------
@@ -485,6 +491,11 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
       break;
     case LW_MODES:
       route_window_push(i->row);
+      break;
+    case LW_STEPS:
+      if (lw->count && lw->items[i->row].extra) {
+        text_page_push(ICON_BUS, lw->items[i->row].title, CMD_TRANSIT_INFO, i->row);
+      }
       break;
     case LW_SETMODE:
       comm_cmd2(CMD_FAV_SETMODE, lw->arg, i->row == 0 ? MODE_USE_DEFAULT : i->row - 1);

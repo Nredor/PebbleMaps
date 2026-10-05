@@ -151,7 +151,7 @@ static int layout(GContext *ctx, GRect b) {
   if (ctx) {
     graphics_context_set_fill_color(ctx, C_BLUE);
     graphics_fill_rect(ctx, s_dir_btn, bh / 2, GCornersAll);
-    const char *label = INFO_TOUCH ? "Directions" : "Hold Select: go";
+    const char *label = g_app.touch ? "Directions" : "Hold Select: go";
     GFont f = g_fonts.small_b;
     int lw = graphics_text_layout_get_content_size(label, f, GRect(0, 0, bw, bh), GTextOverflowModeFill, GTextAlignmentLeft).w;
     int x0 = s_dir_btn.origin.x + (bw - lw - 18) / 2;
@@ -192,7 +192,9 @@ static int layout(GContext *ctx, GRect b) {
     const char *when = "";
     strncpy(who, it->title, sizeof(who) - 1);
     who[sizeof(who) - 1] = 0;
-    char *nl = strchr(who, '\n');
+    char *nl = who;
+    while (*nl && *nl != '\n') nl++;
+    if (!*nl) nl = NULL;
     if (nl) { *nl = 0; when = it->title + (nl - who) + 1; }
     y += put(ctx, who, g_fonts.small_b, C_TEXT, pad, y, tw);
     int sz = g_fonts.small_h - 6;
@@ -329,9 +331,11 @@ static void window_load(Window *window) {
   dots_layer_set_running(s_dots, true);
   relayout();
 #if INFO_TOUCH
+  if (g_app.touch) {
   window_set_touch_bridge_disabled(window, true);
   window_attach_recognizer(window, pan_recognizer_create(pan_cb, NULL, PanAxis_Vertical));
   window_attach_recognizer(window, tap_recognizer_create(tap_cb, NULL));
+  }
 #endif
   OutMsg m;
   comm_msg_init(&m, CMD_INFO);

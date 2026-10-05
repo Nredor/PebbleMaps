@@ -44,7 +44,14 @@ typedef struct {
   MapBar *bar;            // poked while touching
 } MapTouch;
 
+#if TOUCH_HW
 void maptouch_init(MapTouch *mt, GRect frame, MapTapCallback on_tap, void *ctx, MapBar *bar);
 // returns true if the event was used
 bool maptouch_event(MapTouch *mt, const TouchEvent *e);
 void maptouch_deinit(MapTouch *mt);
+#else
+// watches without touch: nothing to do (saves memory)
+#define maptouch_init(...) ((void)0)
+#define maptouch_event(...) false
+#define maptouch_deinit(...) ((void)0)
+#endif

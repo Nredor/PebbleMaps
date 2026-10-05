@@ -84,6 +84,24 @@ function config() {
             'Turn off to save battery: the map then shows where you were when you opened it.',
           defaultValue: true
         },
+        { type: 'heading', id: 'touchHeading', defaultValue: 'Touch screen', size: 4 },
+        {
+          type: 'toggle',
+          messageKey: 'disableTouch',
+          id: 'disableTouch',
+          label: 'Disable touch',
+          description: 'Turns off touch in Pebble Maps completely; use the buttons only. This also switches on the button layout below.',
+          defaultValue: false
+        },
+        {
+          type: 'toggle',
+          messageKey: 'nonTouchUI',
+          id: 'nonTouchUI',
+          label: 'Non-touch UI',
+          description: 'Gives this watch the layout made for watches without touch (no search bar; the gear holds the options). ' +
+            'Touch still works. Every button is available in both layouts.',
+          defaultValue: false
+        },
         { type: 'heading', defaultValue: 'Display', size: 4 },
         {
           type: 'select',
@@ -119,25 +137,25 @@ function config() {
         {
           type: 'text',
           defaultValue:
-            '<strong>Map screen:</strong> Up = move the map · Select = search by voice · ' +
-            'Down (red pin) = Favorites and nearby places.<br><br>' +
-            '<strong>Moving the map:</strong> on any map, the right bar shows + and − to zoom. ' +
-            'Press Select (⋯) to switch to up/down, then left/right, then extra options. ' +
-            'It goes back to normal after 5 seconds. On Pebble Time 2, drag the map with your finger, ' +
-            'double-tap to zoom in, or press and hold to zoom out.<br><br>' +
-            '<strong>Following you:</strong> open the map controls (Up) and press Select (⋯) until the last page. ' +
-            'The top button switches between driving mode (the map turns with you), north up, and a plain map that ' +
-            'stays put. Each press also brings the map back to you. If you move the map yourself, it stays there ' +
-            'while you stand still and follows you again a few seconds after you start moving.<br><br>' +
-            '<strong>Places on the map:</strong> on that same page, ' +
-            'the bottom button opens Places on map: turn places and their names on or off, and pick which kinds ' +
-            '(restaurants, coffee, ATMs...). ' +
-            'On Pebble Time 2 and Round 2, tap a place for photos, hours and reviews.<br><br>' +
+            '<strong>Map screen (buttons):</strong> Up = move the map (zoom, then Select ⋯ for up/down and left/right) · ' +
+            'Select = search by voice · Down (gear) = options.<br><br>' +
+            '<strong>Map screen (Pebble Time 2 / Round 2):</strong> Up (gear) = options · Select = search by voice · ' +
+            'Down (red pin) = Places. Tap the search bar to type. Drag the map, double-tap to zoom in, press and hold to zoom out.<br><br>' +
+            '<strong>Options (gear):</strong> the top button switches between heading up (the map turns with you), ' +
+            'north up, and a plain map that stays put; each press also brings the map back to you. ' +
+            'The middle button opens Places (buttons layout) or the map controls (touch layout). ' +
+            'The bottom button opens Places on map: turn places and their names on or off, and pick which kinds ' +
+            '(restaurants, coffee, ATMs...). Tap a place or its name for photos, hours and reviews.<br><br>' +
+            '<strong>Heading up:</strong> standing still for 30 seconds turns the map back to north up. ' +
+            'If you move the map yourself, it stays there while you stand still and follows you again ' +
+            'a few seconds after you start moving.<br><br>' +
             '<strong>Place info:</strong> on a place, press Down (<strong>i</strong>) for photos, hours and reviews. ' +
             'Select shows the next photo; hold Select for directions.<br><br>' +
             '<strong>Results:</strong> Up/Down moves between pins, Select opens the place. ' +
             'Hold Select for map controls and the list view.<br><br>' +
             '<strong>Place and route screens:</strong> hold Select to move the map.<br><br>' +
+            '<strong>Transit:</strong> in the directions list, rides have a blue <strong>i</strong>: press Select for the ' +
+            'next departures.<br><br>' +
             '<strong>Navigating:</strong> press Select to open the options bar: move the map, alerts ' +
             '(buzz → buzz + voice on Pebble Time 2 / Round 2 → off), voice volume, ' +
             'hide the direction cards (they come back before each turn), see all steps, overview, or end. ' +
@@ -190,6 +208,21 @@ function customFn() {
     var ud = (clayConfig.meta && clayConfig.meta.userData) || {};
     var style = clayConfig.getItemById('mapStyle');
     if (style && ud.color === false) style.hide();
+    // Touch settings: only for watches with a touch screen
+    var info = clayConfig.meta && clayConfig.meta.activeWatchInfo;
+    var plat = info && info.platform;
+    var off = clayConfig.getItemById('disableTouch'), ui = clayConfig.getItemById('nonTouchUI');
+    var head = clayConfig.getItemById('touchHeading');
+    if (plat && plat !== 'emery' && plat !== 'gabbro') {
+      [off, ui, head].forEach(function (it) { if (it) it.hide(); });
+    } else if (off && ui) {
+      // no touch means the button layout
+      var sync = function () {
+        if (off.get()) { ui.set(true); ui.disable(); } else ui.enable();
+      };
+      off.on('change', sync);
+      sync();
+    }
   });
 }
 

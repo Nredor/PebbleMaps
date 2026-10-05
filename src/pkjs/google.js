@@ -439,6 +439,59 @@ function computeRoute(origin, dest, mode, prefs, full, cb) {
     });
 }
 
+// Upcoming departures of one transit line between two stops (the schedule page).
+// Google's routes include live times where the agency shares them.
+// cb(err, { deps: [{ time: ISO, line, headsign }], warnings: [] })
+var TRANSIT_MODE = { BUS: 'BUS', INTERCITY_BUS: 'BUS', TROLLEYBUS: 'BUS', SHARE_TAXI: 'BUS', SUBWAY: 'SUBWAY', METRO_RAIL: 'SUBWAY',
+  TRAM: 'LIGHT_RAIL', LIGHT_RAIL: 'LIGHT_RAIL', MONORAIL: 'LIGHT_RAIL', HEAVY_RAIL: 'TRAIN', COMMUTER_TRAIN: 'TRAIN',
+  HIGH_SPEED_TRAIN: 'TRAIN', LONG_DISTANCE_TRAIN: 'TRAIN', RAIL: 'RAIL' };
+
+function transitDepartures(from, to, vehicleType, line, cb) {
+  var deps = [], warnings = [], seen = {}, rounds = 0;
+  var start = new Date(Date.now() - 60000);
+  function ask() {
+    var body = {
+      origin: waypoint({ lat: from[0], lng: from[1] }),
+      destination: waypoint({ lat: to[0], lng: to[1] }),
+      travelMode: 'TRANSIT', computeAlternativeRoutes: true, languageCode: config.language,
+      departureTime: start.toISOString()
+    };
+    if (TRANSIT_MODE[vehicleType]) body.transitPreferences = { allowedTravelModes: [TRANSIT_MODE[vehicleType]] };
+    postJSON('routes', '/directions/v2:computeRoutes', 'routes.legs.steps.transitDetails,routes.warnings', body, 'Routes API',
+      function (err, j) {
+        if (err) return deps.length ? done() : cb(err);
+        var latest = null;
+        (j.routes || []).forEach(function (r) {
+          (r.warnings || []).forEach(function (w) { if (warnings.indexOf(w) < 0) warnings.push(w); });
+          var steps = [];
+          (r.legs || []).forEach(function (l) { (l.steps || []).forEach(function (st) { if (st.transitDetails) steps.push(st.transitDetails); }); });
+          var td = steps[0];
+          if (!td) return;
+          var tl = td.transitLine || {};
+          var name = tl.nameShort || tl.name || '';
+          var when = td.stopDetails && td.stopDetails.departureTime;
+          if (!when) return;
+          if (!latest || when > latest) latest = when;
+          if (line && name && name !== line) return;   // another line
+          if (seen[when]) return;
+          seen[when] = true;
+          deps.push({ time: when, line: name, headsign: td.headsign || '' });
+        });
+        rounds++;
+        if (latest && deps.length < 6 && rounds < 3) {
+          start = new Date(new Date(latest).getTime() + 60000);
+          return ask();
+        }
+        done();
+      });
+  }
+  function done() {
+    deps.sort(function (a, b) { return a.time < b.time ? -1 : 1; });
+    cb(null, { deps: deps.slice(0, 8), warnings: warnings });
+  }
+  ask();
+}
+
 // --- Maps Static API ------------------------------------------------------
 var STYLES = {
   light: [
@@ -556,6 +609,7 @@ module.exports = {
   searchPois: searchPois,
   placeInfo: placeInfo,
   placePhoto: placePhoto,
+  transitDepartures: transitDepartures,
   setKey: setKey,
   hasKey: hasKey,
   isTest: isTest,

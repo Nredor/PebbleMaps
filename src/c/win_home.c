@@ -16,10 +16,14 @@ static bool s_hello_sent;
 static AppTimer *s_hello_timer;
 static int s_hello_tries;
 static char s_status[64] = "Connecting to phone";
-// How the map follows you: driving (turns with you), north up, or a plain map
+static bool s_gear;           // options strip showing
+static AppTimer *s_gear_timer;
+// How the map follows you: heading up (turns with you), north up, or a plain map
 enum { FOLLOW_DRIVE = 0, FOLLOW_NORTH, FOLLOW_OFF, FOLLOW_COUNT };
 static int s_follow = FOLLOW_DRIVE;
 #define PERSIST_FOLLOW 8
+static IconId follow_icon(void);
+static void touch_cb(const TouchEvent *e, void *ctx);
 
 Window *home_window_get(void) { return s_window; }
 
@@ -83,6 +87,13 @@ static void show_setup(void) {
 static void handle(int cmd, DictionaryIterator *it, void *ctx) {
   switch (cmd) {
     case CMD_STATUS:
+#if TOUCH_HW
+      // touch switched on/off in Settings
+      if (g_app.touch_hw) {
+        touch_service_unsubscribe();
+        if (TOUCH_HW && g_app.touch) touch_service_subscribe(touch_cb, NULL);
+      }
+#endif
       if (!s_hello_sent || !s_map_requested) send_hello();
       if (!g_app.configured) {
         dots_layer_set_running(s_dots, false);
@@ -118,8 +129,9 @@ static void canvas_update(Layer *layer, GContext *ctx) {
   map_draw(ctx, mf, -1);
   if (g_map.complete) dots_layer_set_running(s_dots, false);
 
-  // Search pill (Google style) - hidden while moving the map
-  if (!s_bar.open) {
+#if TOUCH_HW
+  // Search pill (Google style), touch layout only - hidden while moving the map
+  if (!s_bar.open && !g_app.buttons_ui) {
     int ph = g_fonts.small_h + 10;
 #ifdef PBL_ROUND
     int rad = b.size.w / 2;
@@ -143,11 +155,12 @@ static void canvas_update(Layer *layer, GContext *ctx) {
                        GRect(pill.origin.x + 25, pill.origin.y + (ph - g_fonts.small_h) / 2 - 3, pill.size.w - 30, ph),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   }
+#endif
 
-  // Driving mode (map turned to your direction): a compass shows where north is
+  // Heading up (map turned to your direction): a compass shows where north is
   if (g_map.bmp && g_map.rheading) {
-    draw_compass(ctx, PBL_IF_ROUND_ELSE(GPoint(mf.size.w / 2 + 10, b.size.h / 9 + g_fonts.small_h + 26),
-                                        GPoint(18, g_fonts.small_h + 34)), g_map.rheading);
+    int cy = g_app.buttons_ui ? PBL_IF_ROUND_ELSE(b.size.h / 9 + 6, 16) : PBL_IF_ROUND_ELSE(b.size.h / 9 + g_fonts.small_h + 26, g_fonts.small_h + 34);
+    draw_compass(ctx, GPoint(PBL_IF_ROUND_ELSE(mf.size.w / 2 + 10, 18), cy), g_map.rheading);
   }
 
   // Status bubble
@@ -166,8 +179,18 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
   if (s_bar.open) {
     mapbar_draw(&s_bar, ctx, b);
-  } else {
+  } else if (s_gear) {
+    // options: following you (top, with dots), Places or map controls (middle), places on the map (bottom)
+    StripIcons ic = { .up = follow_icon(), .up_color = C_BLUE, .up_page = s_follow, .up_pages = FOLLOW_COUNT,
+                      .select = g_app.buttons_ui ? ICON_EXPLORE : ICON_MOVE, .select_plain = true,
+                      .down = ICON_POI_NAMES };
+    draw_action_strip(ctx, b, &ic);
+  } else if (g_app.buttons_ui) {
     StripIcons ic = { .up = ICON_MOVE, .select = g_app.has_mic ? ICON_MIC : ICON_SEARCH,
+                      .down = ICON_GEAR, .select_color = C_BLUE };
+    draw_action_strip(ctx, b, &ic);
+  } else {
+    StripIcons ic = { .up = ICON_GEAR, .select = g_app.has_mic ? ICON_MIC : ICON_SEARCH,
                       .down = ICON_EXPLORE, .select_color = C_BLUE, .down_color = C_PIN };
     draw_action_strip(ctx, b, &ic);
   }
@@ -254,39 +277,80 @@ static IconId follow_icon(void) {
   return s_follow == FOLLOW_DRIVE ? ICON_NAV : (s_follow == FOLLOW_NORTH ? ICON_NORTH_UP : ICON_MAP);
 }
 
-// Driving -> north up -> plain map -> ...; every change also brings the map back to you
+// Heading up -> north up -> plain map -> ...; every change also brings the map back to you
 static void cycle_follow(void) {
   s_follow = (s_follow + 1) % FOLLOW_COUNT;
   persist_write_int(PERSIST_FOLLOW, s_follow);
-  s_bar.extra_up = follow_icon();
-  s_bar.extra_up_page = s_follow;
   OutMsg m;
   comm_msg_init(&m, CMD_FOLLOW_MODE);
   m.idx = s_follow;
   m.seq = g_map.seq;
   comm_send(&m);
-  ui_toast(s_window, s_follow == FOLLOW_DRIVE ? "Driving mode" : (s_follow == FOLLOW_NORTH ? "Follow me, north up" : "Map only"));
+  ui_toast(s_window, s_follow == FOLLOW_DRIVE ? "Heading up" : (s_follow == FOLLOW_NORTH ? "Follow me, north up" : "Map only"));
 }
 
 static void bar_cb(MapBarEvent ev, void *ctx) {
-  if (ev == MB_EV_EXTRA_UP) {
-    cycle_follow();
-  } else if (ev == MB_EV_EXTRA_DOWN) {
-    // places on the map: which kinds, names, on/off
-    mapbar_close(&s_bar);
-    list_window_push(LW_MAPPLACES, 0);
-  }
   layer_mark_dirty(s_canvas);
+}
+
+// --- Options strip (gear) ------------------------------------------------------
+static void gear_close(void) {
+  s_gear = false;
+  if (s_gear_timer) app_timer_cancel(s_gear_timer);
+  s_gear_timer = NULL;
+  if (s_canvas) layer_mark_dirty(s_canvas);
+}
+static void gear_timeout(void *ctx) {
+  s_gear_timer = NULL;
+  gear_close();
+}
+static void gear_poke(void) {
+  if (s_gear_timer) app_timer_reschedule(s_gear_timer, 5000);
+  else s_gear_timer = app_timer_register(5000, gear_timeout, NULL);
+}
+static void gear_open(void) {
+  s_gear = true;
+  gear_poke();
+  layer_mark_dirty(s_canvas);
+}
+
+static void gear_press(ButtonId b) {
+  switch (b) {
+    case BUTTON_ID_UP:
+      gear_poke();
+      cycle_follow();
+      layer_mark_dirty(s_canvas);
+      break;
+    case BUTTON_ID_SELECT:
+      gear_close();
+      if (g_app.buttons_ui) list_window_push(LW_CATEGORIES, 0);   // Places
+      else mapbar_open(&s_bar);                                    // map controls
+      break;
+    case BUTTON_ID_DOWN:
+      gear_close();
+      list_window_push(LW_MAPPLACES, 0);
+      break;
+    default:
+      gear_close();
+      break;
+  }
 }
 
 // --- Buttons ---------------------------------------------------------------
 static void press(ButtonId b) {
   if (mapbar_button(&s_bar, b)) return;
+  if (s_gear) { gear_press(b); return; }
   if (!g_app.configured && b != BUTTON_ID_BACK) { show_setup(); return; }
   switch (b) {
-    case BUTTON_ID_UP: mapbar_open(&s_bar); break;
+    case BUTTON_ID_UP:
+      if (g_app.buttons_ui) mapbar_open(&s_bar);
+      else gear_open();
+      break;
     case BUTTON_ID_SELECT: start_search(); break;
-    case BUTTON_ID_DOWN: list_window_push(LW_CATEGORIES, 0); break;
+    case BUTTON_ID_DOWN:
+      if (g_app.buttons_ui) gear_open();
+      else list_window_push(LW_CATEGORIES, 0);
+      break;
     case BUTTON_ID_BACK: window_stack_pop(true); break;
     default: break;
   }
@@ -332,7 +396,7 @@ static void touch_cb(const TouchEvent *e, void *ctx) {
 
 static void map_tap(GPoint p, void *ctx) {
   if (!g_app.configured) { show_setup(); return; }
-  bool in_pill = !s_bar.open && p.y < g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0);
+  bool in_pill = !s_bar.open && !g_app.buttons_ui && p.y < g_fonts.small_h + 20 + PBL_IF_ROUND_ELSE(24, 0);
   if (!in_pill) {
     // a place on the map: its photos, hours and reviews
     int poi = map_poi_near(p, map_frame(layer_get_bounds(s_canvas)), 18);
@@ -360,18 +424,14 @@ static void window_load(Window *window) {
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
   if (persist_exists(PERSIST_FOLLOW)) s_follow = clampi(persist_read_int(PERSIST_FOLLOW), 0, FOLLOW_COUNT - 1);
-  mapbar_init(&s_bar, s_canvas, mf.size, follow_icon(), ICON_POI_NAMES, bar_cb, NULL);
-  s_bar.extra_up_page = s_follow;
-  s_bar.extra_up_pages = FOLLOW_COUNT;
-  s_bar.extra_up_color = C_BLUE;
-  s_bar.extra_down_color = C_ICON;
+  mapbar_init(&s_bar, s_canvas, mf.size, ICON_NONE, ICON_NONE, bar_cb, NULL);
   maptouch_init(&s_touch, mf, map_tap, NULL, &s_bar);
 }
 
 static void window_appear(Window *window) {
   comm_set_handler(handle, NULL);
   map_set_observer(s_canvas);
-  if (g_app.touch) touch_service_subscribe(touch_cb, NULL);
+  if (TOUCH_HW && g_app.touch) touch_service_subscribe(touch_cb, NULL);
   if (g_app.status_known && g_app.configured) {
     request_map(s_map_requested);
   } else if (!s_hello_timer && !g_app.status_known) {
@@ -385,9 +445,10 @@ static void window_disappear(Window *window) {
   comm_cmd(CMD_CANCEL);   // map not showing: the phone can rest the GPS
   map_set_observer(NULL);
   ui_toast_cancel();
+  gear_close();
   mapbar_deinit(&s_bar);
   maptouch_deinit(&s_touch);
-  if (g_app.touch) touch_service_unsubscribe();
+  if (g_app.touch_hw) touch_service_unsubscribe();
 }
 
 static void window_unload(Window *window) {

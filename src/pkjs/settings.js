@@ -50,6 +50,8 @@ function get() {
     allModeTimes: bool(c.allModeTimes, true),
     mapStyle: c.mapStyle || 'light',
     liveLocation: bool(c.liveLocation, true),
+    disableTouch: bool(c.disableTouch, false),
+    nonTouchUI: bool(c.nonTouchUI, false),
     textSize: (c.textSize === undefined || c.textSize === '' || c.textSize === 'auto') ? 3 : (parseInt(c.textSize, 10) || 0)
   };
 }

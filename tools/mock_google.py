@@ -276,6 +276,33 @@ def enrich(p, pid):
     return p
 
 
+def fake_transit(body, schedule):
+    """Made-up transit: the drive route with its second step as a bus ride (or, for the
+    schedule page, three departures of that bus)."""
+    import datetime
+    t0 = datetime.datetime.fromisoformat(body.get("departureTime", "2030-01-01T00:00:00Z").replace("Z", "+00:00"))
+
+    def td(k):
+        dep = (t0 + datetime.timedelta(minutes=4 + 12 * k)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {"transitLine": {"nameShort": "8", "vehicle": {"type": "BUS", "name": {"text": "Bus"}},
+                                "agencies": [{"name": "King County Metro"}]},
+                "headsign": "Seattle Center", "stopCount": 4,
+                "stopDetails": {"departureStop": {"name": "4th Ave & Pine St", "location": {"latLng": {"latitude": 47.6112, "longitude": -122.3371}}},
+                                "arrivalStop": {"name": "Western Ave & Virginia", "location": {"latLng": {"latitude": 47.6105, "longitude": -122.3426}}},
+                                "departureTime": dep},
+                "localizedValues": {"departureTime": {"time": {"text": "10:%02d AM" % (4 + 12 * k)}}}}
+    if schedule:
+        return {"routes": [{"legs": [{"steps": [{"transitDetails": td(k)}]}]} for k in range(3)]}
+    r = json.loads(json.dumps(REPLAY.route("DRIVE", True)))
+    steps = r["routes"][0]["legs"][0]["steps"]
+    steps[0]["travelMode"] = "WALK"
+    if len(steps) > 1:
+        steps[1]["travelMode"] = "TRANSIT"
+        steps[1]["transitDetails"] = td(0)
+        steps[1]["navigationInstruction"] = {"maneuver": "STRAIGHT", "instructions": "Bus towards Seattle Center"}
+    return r
+
+
 def fake_photo(k):
     """A simple made-up picture (sky, building, plate) as JPEG."""
     w, hgt = 480, 360
@@ -378,8 +405,12 @@ class H(BaseHTTPRequestHandler):
             if self.path.endswith("places:autocomplete"):
                 return self.send(200, REPLAY.autocomplete())
             if self.path.endswith("computeRoutes"):
-                full = "legs" in (self.headers.get("X-Goog-FieldMask") or "")
-                return self.send(200, REPLAY.route(body.get("travelMode", "DRIVE"), full))
+                mask = self.headers.get("X-Goog-FieldMask") or ""
+                full = "legs" in mask
+                mode = body.get("travelMode", "DRIVE")
+                if mode == "TRANSIT" and full:
+                    return self.send(200, fake_transit(body, "transitDetails" in mask and "polyline" not in mask))
+                return self.send(200, REPLAY.route(mode, full))
         if WORLD and self.path.endswith("places:searchText"):
             res = WORLD.search_text(body.get("textQuery", ""), _center(body))
             return self.send(200, {"places": [WORLD.place_json(p) for p in res]})

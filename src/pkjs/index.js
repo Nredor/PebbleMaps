@@ -43,11 +43,12 @@ var simTimer = null;
 var gpsTimer = null;
 var currentMapSeq = 0;
 var mapVisible = false;   // a map screen (not navigation) is showing on the watch
-var followMode = 0;       // home map (watch button): 0 driving (turns with you), 1 follow north up, 2 plain map
-var homeDrive = true;     // driving mode: turns with you, you near the bottom
+var followMode = 0;       // home map (watch button): 0 heading up (turns with you), 1 follow north up, 2 plain map
+var homeDrive = true;     // heading up: turns with you, you near the bottom
+var STILL_NORTH = 30000;  // heading up: standing still this long turns the map back to north up
 var PAN_HOLD = 7000;      // after you move the map, how long before it follows you again (while you move)
 var poiMode = 1;          // places on the home map: 0 off, 1 dots, 2 dots with names (watch button)
-var DRIVE_AHEAD = 0.22;   // driving mode: how far below the middle your arrow sits (share of height)
+var DRIVE_AHEAD = 0.22;   // heading up: how far below the middle your arrow sits (share of height)
 // Live location while a map is showing (off = battery saver: the spot when the map opened)
 var live = { on: false, watchId: null, simTimer: null, stopTimer: null, prev: null, heading: 0, moving: false, lastMove: 0, lastRender: 0 };
 var pois = [];            // places drawn on the home map
@@ -76,7 +77,8 @@ function sendStatus() {
     cmd: CMD.STATUS,
     num: google.hasKey() ? 1 : 0,
     mode: S.defaultMode,
-    flags: (S.imperial ? 1 : 0) | (S.vibrate ? 2 : 0) | ((S.textSize & 3) << 2) | (S.mapStyle === 'dark' ? 16 : 0)
+    flags: (S.imperial ? 1 : 0) | (S.vibrate ? 2 : 0) | ((S.textSize & 3) << 2) | (S.mapStyle === 'dark' ? 16 : 0) |
+      (S.disableTouch ? 32 : 0) | ((S.nonTouchUI || S.disableTouch) ? 64 : 0)
   });
 }
 
@@ -190,7 +192,7 @@ function meMarker(v) {
   return markerFor(me, v, P.MK.ME);
 }
 
-// What the home map shows: the watch button's choice, limited in driving mode by the settings
+// What the home map shows: the watch's choice
 function placesShown() {
   return watch.lowmem ? Math.min(poiMode, 1) : poiMode;   // Pebble Time / Time Round: dots only
 }
@@ -445,7 +447,7 @@ function cloneView(v) {
   return { center: v.center.slice(), zoom: v.zoom, w: v.w, h: v.h, path: v.path, gmarkers: v.gmarkers, heading: v.heading || 0 };
 }
 
-// Home map following you: centered on you (north up), or in driving mode turned
+// Home map following you: centered on you (north up), or heading up: turned
 // to your direction of travel with you near the bottom
 function followView(v) {
   var nv = cloneView(v);
@@ -455,7 +457,9 @@ function followView(v) {
   }
   if (homeDrive) {
     var q = function (h) { return (Math.round(h / 5) * 5) % 360; };
-    var hd = live.on && live.moving ? q(live.heading) : (v.heading || 0);
+    // moving: your direction; a short stop keeps it; still for 30 s: north up
+    var still = !live.on || (!live.moving && Date.now() - live.lastMove > STILL_NORTH);
+    var hd = live.on && live.moving ? q(live.heading) : (still ? 0 : (v.heading || 0));
     nv.heading = hd;
     var pos = geo.project(me[0], me[1], nv.zoom), a = geo.rad(hd), ahead = DRIVE_AHEAD * nv.h;
     nv.center = geo.unproject(pos[0] + Math.sin(a) * ahead, pos[1] - Math.cos(a) * ahead, nv.zoom);
@@ -628,6 +632,9 @@ function onLiveFix(p, acc, cHeading, cSpeed, t) {
     live.lastMove = t;
   } else if (live.moving && t - live.lastMove > 6000) {
     live.moving = false;   // stopped: the arrow goes back to a dot
+    // after 30 s of standing still, heading up turns back to north (fixes may stop coming)
+    clearTimeout(live.northTimer);
+    live.northTimer = setTimeout(liveUpdate, STILL_NORTH + 500);
   }
   liveUpdate();
 }
@@ -1512,6 +1519,45 @@ function onPhoto(p) {
   });
 }
 
+// --- Transit schedule for one ride in the directions --------------------------------
+function onTransitInfo(p) {
+  var rt = (navigator_ && navigator_.route) || route;
+  var step = rt && rt.steps[p.idx];
+  var t = step && step.transit;
+  function page(title, body) { send({ cmd: CMD.INFO_DATA, text: fmt.clip(plainText(title), 44), list: body }); }
+  if (!t) return page('Schedule', 'No transit details for this step.');
+  var title = t.line + (t.headsign ? ' to ' + t.headsign : '');
+  if (!t.fromLoc || !t.toLoc) return page(title, 'Google didn\'t send stop locations for this ride.');
+  google.transitDepartures(t.fromLoc, t.toLoc, t.vehicleType, t.line, function (err, res) {
+    var lines = [];
+    if (t.from) lines.push('From ' + plainText(t.from));
+    if (t.agency) lines.push(plainText(t.agency));
+    if (t.depTime) lines.push('Your trip: ' + clockText(t.depTime) + leaveIn(t.depTime));
+    if (err) {
+      lines.push('', 'Couldn\'t get more departures (' + (err.title || 'no connection') + ').');
+      return page(title, lines.join('\n'));
+    }
+    lines.push('', 'Next departures');
+    if (!res.deps.length) lines.push('None found in the next few hours.');
+    res.deps.forEach(function (d) {
+      var mine = t.depTime && Math.abs(new Date(d.time) - new Date(t.depTime)) < 60000;
+      lines.push(clockText(d.time) + leaveIn(d.time) + (mine ? '  (yours)' : ''));
+    });
+    if (res.warnings.length) lines.push('', 'Notices', res.warnings.slice(0, 3).map(plainText).join('\n'));
+    lines.push('', 'Times include live updates where the agency shares them with Google. Google doesn\'t pass on cancellation alerts.');
+    var body = lines.join('\n');
+    while (utf8Len(body) > watch.inbox - 200 && lines.length > 4) { lines.splice(lines.length - 3, 1); body = lines.join('\n'); }
+    page(title, body);
+  });
+}
+
+function leaveIn(iso) {
+  var min = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+  if (isNaN(min)) return '';
+  if (min <= 0) return ' (now)';
+  return min < 60 ? ' (in ' + min + ' min)' : '';
+}
+
 // --- Favorites --------------------------------------------------------------
 function onFavList() {
   var favs = settings.favorites();
@@ -1598,7 +1644,7 @@ function onMessage(e) {
         break;
       }
       case CMD.FOLLOW_MODE: {
-        // driving / north up / plain map: each change brings the map back to you
+        // heading up / north up / plain map: each change brings the map back to you
         followMode = p.idx || 0;
         homeDrive = followMode === 0;
         var fs = views.home;
@@ -1611,6 +1657,7 @@ function onMessage(e) {
         }
         break;
       }
+      case CMD.TRANSIT_INFO: onTransitInfo(p); break;
       case CMD.SEARCH: onSearch(p); break;
       case CMD.NEARBY: onNearby(p); break;
       case CMD.AUTOCOMPLETE: onAutocomplete(p); break;

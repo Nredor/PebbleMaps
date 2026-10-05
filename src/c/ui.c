@@ -433,6 +433,19 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 4, 20, 36, 20);
       graphics_draw_arc(ctx, GRect(P(12, 3).x, P(12, 3).y, S(16), S(34)), GOvalScaleModeFitCircle, 0, TRIG_MAX_ANGLE);
       break;
+    case ICON_GEAR: {
+      // a cog: four thick bars make eight teeth, a ring on top, a hole in the middle
+      int tw = S(7);
+      graphics_context_set_stroke_width(ctx, tw < 2 ? 2 : tw);
+      line(ctx, 20, 3, 20, 37);
+      line(ctx, 3, 20, 37, 20);
+      line(ctx, 8, 8, 32, 32);
+      line(ctx, 32, 8, 8, 32);
+      circle(ctx, 20, 20, 13, true);
+      graphics_context_set_fill_color(ctx, bg);
+      circle(ctx, 20, 20, 5, true);
+      break;
+    }
     case ICON_NORTH_UP: {
       // a small arrow pointing up at an N
       static const int8_t arrow[] = {20, 20, 29, 38, 20, 33, 11, 38};
@@ -1032,6 +1045,21 @@ void draw_side_tab(GContext *ctx, GRect bounds) {
   graphics_fill_circle(ctx, c, r);
   graphics_context_set_fill_color(ctx, GColorWhite);
   for (int i = -1; i <= 1; i++) graphics_fill_circle(ctx, GPoint(c.x - r / 2 - 1, c.y + i * 6), 1);
+}
+
+// Right-edge half circle with a lowercase "i": "press Select for more info"
+void draw_info_tab(GContext *ctx, GRect cell, bool hl) {
+  int r = 11;
+  GPoint c = GPoint(cell.origin.x + cell.size.w, cell.origin.y + cell.size.h / 2);
+#ifdef PBL_COLOR
+  graphics_context_set_antialiased(ctx, true);
+#endif
+  graphics_context_set_fill_color(ctx, hl ? GColorWhite : C_BLUE);
+  graphics_fill_circle(ctx, c, r);
+  GColor fg = hl ? C_BLUE : GColorWhite;
+  graphics_context_set_fill_color(ctx, fg);
+  graphics_fill_circle(ctx, GPoint(c.x - 5, c.y - 5), 1);
+  graphics_fill_rect(ctx, GRect(c.x - 6, c.y - 2, 2, 8), 0, GCornerNone);
 }
 
 // ---------------------------------------------------------------------------

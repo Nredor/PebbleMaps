@@ -33,7 +33,7 @@ typedef enum {
   ICON_SOUND, ICON_CLOSE, ICON_ZOOM_IN, ICON_ZOOM_OUT, ICON_MAP,
   ICON_KEY, ICON_MOVE, ICON_MORE, ICON_UP, ICON_DOWN, ICON_LEFT, ICON_RIGHT,
   ICON_EYE, ICON_EYE_OFF, ICON_STOP, ICON_NORTH, ICON_HEADING, ICON_TRIANGLE, ICON_VIBRATE, ICON_VOL_UP, ICON_VOL_DOWN,
-  ICON_INFO, ICON_GLOBE, ICON_POI_NAMES, ICON_BAR, ICON_NORTH_UP, ICON_COUNT
+  ICON_INFO, ICON_GLOBE, ICON_POI_NAMES, ICON_BAR, ICON_NORTH_UP, ICON_GEAR, ICON_COUNT
 } IconId;
 
 // Fonts, chosen by the text-size setting (level 0 = standard, 1 = large, 2 = extra large)
@@ -102,6 +102,8 @@ typedef struct {
 } StripIcons;
 // Small black half-circle on the right edge: "press Select for options"
 void draw_side_tab(GContext *ctx, GRect bounds);
+// Half circle with an "i" on a list row's right edge (Select for more info)
+void draw_info_tab(GContext *ctx, GRect cell, bool hl);
 void draw_action_strip(GContext *ctx, GRect bounds, const StripIcons *icons);
 
 // Toast banner (one at a time, attached to a window)

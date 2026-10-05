@@ -229,7 +229,9 @@ static void draw_bottom(GContext *ctx, GRect b) {
   char t[32];
   strncpy(t, s_remain, sizeof(t) - 1);
   t[sizeof(t) - 1] = 0;
-  char *sep = strstr(t, " · ");
+  // split "12 min · 2.3 mi" at the dot (no strstr: it costs memory)
+  char *sep = NULL;
+  for (char *q = t; *q && !sep; q++) if (q[0] == ' ' && !strncmp(q + 1, "·", strlen("·")) && q[1 + strlen("·")] == ' ') sep = q;
   const char *dist = "";
   if (sep) { *sep = 0; dist = s_remain + (sep - t) + strlen(" · "); }
   graphics_context_set_text_color(ctx, C_GREEN);
@@ -538,7 +540,7 @@ static void window_appear(Window *window) {
   comm_set_handler(handle, NULL);
   map_set_observer(s_canvas);
   map_set_xform_listener(on_xform);
-  if (g_app.touch) touch_service_subscribe(touch_cb, NULL);
+  if (TOUCH_HW && g_app.touch) touch_service_subscribe(touch_cb, NULL);
 }
 
 static void window_disappear(Window *window) {
@@ -550,7 +552,7 @@ static void window_disappear(Window *window) {
   maptouch_deinit(&s_touch);
   if (s_menu_timer) { app_timer_cancel(s_menu_timer); s_menu_timer = NULL; }
   s_menu_open = false;
-  if (g_app.touch) touch_service_unsubscribe();
+  if (g_app.touch_hw) touch_service_unsubscribe();
 }
 
 static void window_unload(Window *window) {

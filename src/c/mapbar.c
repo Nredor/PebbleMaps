@@ -115,6 +115,7 @@ void mapbar_draw(MapBar *mb, GContext *ctx, GRect bounds) {
   draw_action_strip(ctx, bounds, &ic);
 }
 
+#if TOUCH_HW
 // ---------------------------------------------------------------------------
 // Touch: drag to pan, double-tap to zoom in, press and hold to zoom out
 // ---------------------------------------------------------------------------
@@ -206,3 +207,4 @@ bool maptouch_event(MapTouch *mt, const TouchEvent *e) {
   if (mt->on_tap) mt->on_tap(GPoint(e->x, e->y), mt->ctx);
   return true;
 }
+#endif  // TOUCH_HW

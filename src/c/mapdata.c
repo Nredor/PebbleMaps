@@ -532,7 +532,21 @@ static int near_marker(GPoint p, GRect frame, int max_dist, bool pins) {
 }
 
 int map_pin_near(GPoint p, GRect frame, int max_dist) { return near_marker(p, frame, max_dist, true); }
-int map_poi_near(GPoint p, GRect frame, int max_dist) { return near_marker(p, frame, max_dist, false); }
+#if !PM_LOWMEM
+// Name pills drawn last time (screen coordinates), so tapping a name works like tapping its dot
+static GRect s_pills[17];
+static uint8_t s_pill_idx[17];
+static int s_npills;
+#endif
+
+int map_poi_near(GPoint p, GRect frame, int max_dist) {
+#if !PM_LOWMEM
+  for (int i = 0; i < s_npills; i++) {
+    if (grect_contains_point(&s_pills[i], &p)) return s_pill_idx[i];
+  }
+#endif
+  return near_marker(p, frame, max_dist, false);
+}
 
 void map_draw(GContext *ctx, GRect frame, int selected) {
   int sx = g_map.shift_x + s_drag_x, sy = g_map.shift_y + s_drag_y;
@@ -562,6 +576,7 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
     }
   }
   int n_me = n_used;
+  s_npills = 0;
   for (int i = 0; i < g_map.n_markers; i++) {
     const Marker *mk = &g_map.markers[i];
     if (mk->kind < MK_POI || mk->name < 0 || !g_map.names) continue;
@@ -595,7 +610,13 @@ void map_draw(GContext *ctx, GRect frame, int selected) {
                                                      used[j].origin.x + used[j].size.w == p.x + (g_fonts.level >= 1 ? 5 : 4) + 3);
             if (labeled) r = used[j];
           }
-          if (labeled) draw_poi_label(ctx, p, mk->kind - MK_POI, g_map.names + mk->name, r);
+          if (labeled) {
+            draw_poi_label(ctx, p, mk->kind - MK_POI, g_map.names + mk->name, r);
+            if (s_npills < 17) {
+              s_pills[s_npills] = GRect(r.origin.x - 2, r.origin.y - 3, r.size.w + 4, r.size.h + 6);
+              s_pill_idx[s_npills++] = mk->index;
+            }
+          }
         }
 #endif
         // with names on, every place shown has its name: no room for the name, no dot
