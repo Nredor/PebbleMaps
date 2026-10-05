@@ -7,34 +7,6 @@ function config() {
     {
       type: 'section',
       items: [
-        { type: 'pmguide' }
-      ]
-    },
-    {
-      type: 'section',
-      items: [
-        { type: 'heading', defaultValue: 'Your Google Maps key', size: 4 },
-        {
-          type: 'input',
-          messageKey: 'apiKey',
-          defaultValue: '',
-          label: 'Google Maps key',
-          description: 'Stored only on your phone and sent only to Google.',
-          attributes: {
-            placeholder: 'Paste here — starts with AIza',
-            type: 'text',
-            autocapitalize: 'off',
-            autocorrect: 'off',
-            autocomplete: 'off',
-            spellcheck: 'false'
-          }
-        },
-        { type: 'pmkeytest' }
-      ]
-    },
-    {
-      type: 'section',
-      items: [
         { type: 'heading', defaultValue: '★ Favorites', size: 4 },
         {
           type: 'text',
@@ -147,10 +119,41 @@ function config() {
             '<strong>Results:</strong> Up/Down moves between pins, Select opens the place. ' +
             'Hold Select for map controls and the list view.<br><br>' +
             '<strong>Place and route screens:</strong> hold Select to move the map.<br><br>' +
-            '<strong>Navigating:</strong> press Select to open the options bar: move the map, mute buzzing, ' +
+            '<strong>Navigating:</strong> press Select to open the options bar: move the map, alerts ' +
+            '(buzz → buzz + voice on Pebble Time 2 / Round 2 → off), voice volume, ' +
             'hide the direction cards (they come back before each turn), see all steps, overview, or end. ' +
+            'Tap the compass to switch between north-up and the map turning with you. ' +
             'Press Back twice to stop.'
         }
+      ]
+    },
+    {
+      type: 'section',
+      items: [
+        { type: 'heading', defaultValue: 'Your Google Maps key', size: 4 },
+        { type: 'pmstatus' },
+        {
+          type: 'input',
+          messageKey: 'apiKey',
+          defaultValue: '',
+          label: 'Google Maps key',
+          description: 'Stored only on your phone and sent only to Google.',
+          attributes: {
+            placeholder: 'Paste here — starts with AIza',
+            type: 'text',
+            autocapitalize: 'off',
+            autocorrect: 'off',
+            autocomplete: 'off',
+            spellcheck: 'false'
+          }
+        },
+        { type: 'pmkeytest' }
+      ]
+    },
+    {
+      type: 'section',
+      items: [
+        { type: 'pmguide' }
       ]
     },
     {

@@ -330,7 +330,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 
 // --- Options bar -----------------------------------------------------------------
 static void end_nav(void) {
-  voice_stop();
+  voice_set_enabled(false);
   comm_cmd(CMD_NAV_STOP);
   window_stack_remove(s_window, true);
 }
@@ -404,7 +404,7 @@ static void toggle_mute(void) {
   if (s_alert_mode == ALERT_VIBE) s_alert_mode = VOICE_AVAILABLE ? ALERT_VOICE : ALERT_OFF;
   else if (s_alert_mode == ALERT_VOICE) s_alert_mode = ALERT_OFF;
   else s_alert_mode = ALERT_VIBE;
-  if (s_alert_mode != ALERT_VOICE) voice_stop();
+  voice_set_enabled(s_alert_mode == ALERT_VOICE);
   if (VOICE_AVAILABLE) persist_write_bool(PERSIST_VOICE, s_alert_mode == ALERT_VOICE);
   send_voice();
   if (s_menu_page >= menu_pages()) s_menu_page = 0;
@@ -606,5 +606,6 @@ void nav_window_push(int mode) {
   s_alert_mode = (VOICE_AVAILABLE && persist_exists(PERSIST_VOICE) && persist_read_bool(PERSIST_VOICE)) ? ALERT_VOICE : ALERT_VIBE;
   map_request(CMD_NAV_START, b.size.w, b.size.h, -1, mode);
   if (!s_heading_up) send_view_mode();
+  voice_set_enabled(s_alert_mode == ALERT_VOICE);
   if (s_alert_mode == ALERT_VOICE) send_voice();
 }

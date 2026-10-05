@@ -229,6 +229,7 @@ class H(BaseHTTPRequestHandler):
         if self.path.endswith("text:synthesize"):
             import base64, struct, wave
             text = body.get("input", {}).get("text", "")
+            sys.stderr.write("TTS: " + text + "\n")
             n = int(8000 * min(3.0, 0.3 + 0.06 * len(text)))
             buf = io.BytesIO()
             w = wave.open(buf, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(8000)

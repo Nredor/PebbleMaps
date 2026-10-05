@@ -36,7 +36,7 @@ var THEME_CSS = [
   '.pm-dots{display:inline-flex;gap:6px;margin-top:10px;}',
   '.pm-dots i{width:9px;height:9px;border-radius:50%;display:inline-block;}',
   // status pill
-  '.pm-status{text-align:left;display:flex;align-items:center;gap:10px;margin:14px 2px 0;padding:12px 14px;border-radius:12px;font-size:15px;line-height:1.35;}',
+  '.pm-status{text-align:left;display:flex;align-items:center;gap:10px;margin:8px 0 4px;box-sizing:border-box;padding:12px 14px;border-radius:12px;font-size:15px;line-height:1.35;}',
   '.pm-status.ok{background:#e6f4ea;color:#137333;}',
   '.pm-status.todo{background:#fef7e0;color:#7a4f01;}',
   '.pm-status b{display:block;font-size:16px;}',
@@ -70,9 +70,16 @@ var THEME_CSS = [
   '.pm-step .tip{background:#e8f0fe;color:#174ea6;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:14px;}',
   '.pm-step .warn{background:#fce8e6;color:#a50e0e;border-radius:8px;padding:8px 10px;margin-top:8px;font-size:14px;}',
   '.pm-link{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap;}',
-  '.pm-link a.go{display:inline-block;background:#1a73e8;color:#fff!important;text-decoration:none;border-radius:20px;padding:8px 16px;font-weight:600;font-size:15px;}',
+  '.pm-link button.go{min-width:0;margin:0;background:#1a73e8!important;color:#fff!important;border:0!important;border-radius:20px;padding:8px 18px!important;font-weight:600;font-size:15px!important;}',
+  '.pm-link .note{font-size:13px;color:#188038;font-weight:600;}',
   '.pm-link button.copy{min-width:0;margin:0;background:#fff!important;color:#1a73e8!important;border:1px solid #dadce0!important;padding:7px 12px!important;font-size:14px!important;}',
-  '.pm-link .url{display:block;width:100%;font-size:12px;color:#5f6368;word-break:break-all;}',
+  '.pm-link .url{display:block;width:100%;font-size:12px;color:#5f6368;word-break:break-all;-webkit-user-select:all;user-select:all;}',
+  '.pm-jump{margin-top:12px;}',
+  '.pm-keytest .voice{font-size:14px;line-height:1.4;margin-top:8px;border-radius:10px;}',
+  '.pm-keytest .voice.ok{color:#188038;}',
+  '.pm-keytest .voice.wait{color:#5f6368;}',
+  '.pm-keytest .voice.bad{color:#a50e0e;background:#fce8e6;padding:10px 12px;}',
+  '.pm-jump button{background:#fef7e0!important;color:#3c4043!important;border:1px solid #f9ab00!important;border-radius:20px;padding:8px 16px!important;font-size:15px!important;}',
   '.pm-check{display:flex!important;align-items:center;justify-content:flex-start!important;gap:8px;padding:8px 0 0!important;font-size:14px;color:#1e8e3e;font-weight:600;}',
   '.pm-check input{width:20px;height:20px;}',
   '.pm-chip{display:inline-block;background:#f1f3f4;border-radius:6px;padding:1px 6px;font-weight:600;color:#202124;}',
@@ -138,10 +145,37 @@ module.exports = [
       '<p>Google Maps directions on your wrist</p>',
       '<div class="pm-dots"><i style="background:#4285f4"></i><i style="background:#ea4335"></i>',
       '<i style="background:#fbbc04"></i><i style="background:#34a853"></i></div>',
-      '<div class="pm-status todo" id="pm-status"><span class="ic">🔑</span><span><b>Let\'s get you set up</b>',
-      'Pebble Maps uses your own free Google Maps key. Follow the steps below — about 10 minutes, one time only.</span></div>',
+      '<div class="pm-jump" style="display:none"><button type="button">🔑 Set up your Google key ↓</button></div>',
       '</div>'
     ].join(''),
+    manipulator: staticManipulator(),
+    initialize: function (minified, clay) {
+      var root = this.$element[0];
+      var jump = root.querySelector('.pm-jump');
+      jump.querySelector('button').addEventListener('click', function () {
+        var target = document.getElementById('pm-key-area');
+        if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      clay.on(clay.EVENTS.AFTER_BUILD, function () {
+        var item = clay.getItemByMessageKey('apiKey');
+        function refresh() {
+          var v = item ? String(item.get() || '').trim() : '';
+          jump.style.display = v ? 'none' : 'block';
+        }
+        if (item) {
+          item.on('change', refresh);
+          var input = item.$manipulatorTarget[0];
+          if (input) input.addEventListener('input', refresh);
+        }
+        refresh();
+      });
+    }
+  },
+
+  // Key status ("You're all set" / "Let's get you set up"), shown with the key box
+  {
+    name: 'pmstatus',
+    template: '<div id="pm-key-area"><div class="pm-status todo" id="pm-status"></div></div>',
     manipulator: staticManipulator(),
     initialize: function (minified, clay) {
       var root = this.$element[0];
@@ -153,7 +187,7 @@ module.exports = [
           if (v) {
             status.className = 'pm-status ok';
             status.innerHTML = '<span class="ic">✅</span><span><b>You\'re all set</b>' +
-              'Your Google key is saved. You can change settings and favorites below.</span>';
+              'Your Google key is saved.</span>';
           } else {
             status.className = 'pm-status todo';
             status.innerHTML = '<span class="ic">🔑</span><span><b>Let\'s get you set up</b>' +
@@ -257,8 +291,8 @@ module.exports = [
       '</div></details>',
 
       // Step 7
-      '<details class="pm-step" data-step="7" open><summary><span class="n">7</span><span class="t">Paste your key below</span><span class="chev">›</span></summary>',
-      '<div class="body">Tap the <b>Google Maps key</b> box, paste your key, then tap <b>Save settings</b> at the bottom. ',
+      '<details class="pm-step" data-step="7" open><summary><span class="n">7</span><span class="t">Paste your key above</span><span class="chev">›</span></summary>',
+      '<div class="body">Tap the <b>Google Maps key</b> box just above these steps, paste your key, then tap <b>Save settings</b> at the bottom. ',
       'A map preview appears when the key works, and your watch will say <b>"Your Google key works!"</b></div></details>',
 
       '<div class="pm-free"><b>What\'s free?</b> Every month Google includes about 10,000 map pictures, 5,000 place searches and 5,000–10,000 route lookups at no charge. ',
@@ -288,46 +322,53 @@ module.exports = [
         setCollapsed(!!has);
         root.querySelector('.pm-hide-row').style.display = has ? 'block' : 'none';
       });
-      // Build link rows: "Open" button + "Copy link" + visible address
+      // Link rows. Links opened from here would load inside the Pebble app, where you aren't
+      // signed in to Google, so we copy the address for you to paste into Chrome instead.
+      function copyText(text) {
+        var ok = false;
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.top = '0';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          ta.setSelectionRange(0, text.length);
+          ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch (e) { ok = false; }
+        if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+          try { navigator.clipboard.writeText(text); ok = true; } catch (e2) { ok = false; }
+        }
+        return ok;
+      }
       var links = root.querySelectorAll('.pm-link');
       Array.prototype.forEach.call(links, function (box) {
         var url = box.getAttribute('data-url');
-        var a = document.createElement('a');
-        a.className = 'go';
-        a.href = url;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.textContent = 'Open ↗';
         var b = document.createElement('button');
         b.type = 'button';
-        b.className = 'copy';
+        b.className = 'go';
         b.textContent = 'Copy link';
-        b.addEventListener('click', function (ev) {
-          ev.preventDefault();
-          var ok = false;
-          try {
-            var ta = document.createElement('textarea');
-            ta.value = url;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            ta.setSelectionRange(0, url.length);
-            ok = document.execCommand('copy');
-            document.body.removeChild(ta);
-          } catch (e) { ok = false; }
-          if (!ok && navigator.clipboard) {
-            navigator.clipboard.writeText(url).then(function () { b.textContent = 'Copied ✓'; });
-          }
-          b.textContent = ok ? 'Copied ✓' : 'Press and hold the address to copy';
-          setTimeout(function () { b.textContent = 'Copy link'; }, 2500);
-        });
+        var note = document.createElement('span');
+        note.className = 'note';
         var u = document.createElement('span');
         u.className = 'url';
-        u.textContent = url.replace('https://', '');
-        box.appendChild(a);
+        u.textContent = url;
+        b.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          if (copyText(url)) {
+            b.textContent = 'Copied ✓';
+            note.textContent = 'Now open Chrome, tap the address bar, and paste.';
+          } else {
+            note.textContent = 'Press and hold the address below, then choose Copy.';
+          }
+          setTimeout(function () { b.textContent = 'Copy link'; }, 3000);
+        });
         box.appendChild(b);
+        box.appendChild(note);
         box.appendChild(u);
       });
       // "I did this" checkboxes remembered on this phone
@@ -374,7 +415,7 @@ module.exports = [
   // Live key check: shows a Google map preview using the pasted key
   {
     name: 'pmkeytest',
-    template: '<div class="pm-keytest"><div class="msg wait">Paste your key above to test it.</div><div class="mapbox"><img alt="Map preview"></div></div>',
+    template: '<div class="pm-keytest"><div class="msg wait">Paste your key above to test it.</div><div class="mapbox"><img alt="Map preview"></div><div class="voice"></div></div>',
     manipulator: staticManipulator(),
     initialize: function (minified, clay) {
       var root = this.$element[0];
@@ -388,7 +429,45 @@ module.exports = [
         msg.className = 'msg ' + cls;
         msg.textContent = text;
       }
+      // Spoken directions use Google's Text-to-Speech: check it separately
+      var voiceEl = root.querySelector('.voice');
+      function testVoice(key) {
+        voiceEl.className = 'voice wait';
+        voiceEl.textContent = 'Spoken directions: checking…';
+        var x = new XMLHttpRequest();
+        x.open('POST', 'https://texttospeech.googleapis.com/v1/text:synthesize?key=' + encodeURIComponent(key), true);
+        x.setRequestHeader('Content-Type', 'application/json');
+        x.onload = function () {
+          if (x.status >= 200 && x.status < 300) {
+            voiceEl.className = 'voice ok';
+            voiceEl.textContent = '✓ Spoken directions are ready (Pebble Time 2 and Round 2).';
+            return;
+          }
+          var body = String(x.responseText || '');
+          var why;
+          if (/API_KEY_SERVICE_BLOCKED|are blocked/i.test(body)) {
+            why = 'your key is limited to certain services. Open your key (step 5) and also tick "Cloud Text-to-Speech API" under API restrictions, then save.';
+          } else if (/SERVICE_DISABLED|has not been used|is disabled/i.test(body)) {
+            why = 'the Text-to-Speech service is off. Open the link in step 4 and tap Enable. It can take a few minutes to start working.';
+          } else if (/billing/i.test(body)) {
+            why = 'Google needs billing turned on (step 3).';
+          } else {
+            var m = body.match(/"message"\s*:\s*"([^"]+)"/);
+            why = 'Google said: ' + (m ? m[1] : 'error ' + x.status);
+          }
+          voiceEl.className = 'voice bad';
+          voiceEl.textContent = 'Spoken directions won\'t work yet: ' + why + ' (Everything else works without it.)';
+        };
+        x.onerror = function () {
+          voiceEl.className = 'voice wait';
+          voiceEl.textContent = 'Spoken directions: couldn\'t check right now.';
+        };
+        x.send(JSON.stringify({ input: { text: 'ok' }, voice: { languageCode: 'en-US' },
+                                audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: 8000 } }));
+      }
       function test(key) {
+        voiceEl.className = 'voice';
+        voiceEl.textContent = '';
         key = String(key || '').replace(/\s+/g, '');
         function fire(name) {
           try {
@@ -412,6 +491,7 @@ module.exports = [
           box.style.display = 'block';
           show('ok', '✓ It works! Google sent a map with your key. Tap Save settings below.');
           fire('pm-key-ok');
+          testVoice(key);
         };
         img.onerror = function () {
           box.style.display = 'none';

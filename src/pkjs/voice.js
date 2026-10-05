@@ -18,6 +18,7 @@ var clipId = 0;
 var inbox = 2048;
 var failedOnce = false;
 var onProblem = null;
+var lastSpoke = 0;
 
 // --- base64 / WAV -----------------------------------------------------------------
 var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -149,12 +150,15 @@ function sendClip(clip) {
 module.exports = {
   setInbox: function (n) { inbox = n || 2048; },
   onProblem: function (fn) { onProblem = fn; },
+  lastSpoke: function () { return lastSpoke; },
   speak: function (text) {
     if (!text) return;
+    lastSpoke = Date.now();
     synth(text, function (err, clip) { if (!err && clip) sendClip(clip); });
   },
   prepare: function (texts) {
     (texts || []).forEach(function (t) { if (t) synth(t, function () {}); });
   },
-  reset: function () { failedOnce = false; }
+  reset: function () { failedOnce = false; },
+  cancel: function () { msg.drop('voice'); }
 };

@@ -36,6 +36,12 @@ static int s_buf_n, s_buf_off;     // decoded samples waiting, and how many alre
 static AppTimer *s_timer;
 static bool s_open;
 static int s_volume = -1;
+static bool s_enabled;
+
+void voice_set_enabled(bool on) {
+  s_enabled = on;
+  if (!on) voice_stop();
+}
 
 int voice_volume(void) {
   if (s_volume < 0) s_volume = persist_exists(PERSIST_VOLUME) ? persist_read_int(PERSIST_VOLUME) : 70;
@@ -111,6 +117,7 @@ static void play(uint8_t *clip, int samples, int pred, int index) {
 }
 
 void voice_handle(DictionaryIterator *it) {
+  if (!s_enabled) return;
   int id = tuple_int(it, MESSAGE_KEY_idx, 0);
   int off = tuple_int(it, MESSAGE_KEY_offset, 0);
   const Tuple *dt = dict_find(it, MESSAGE_KEY_data);
@@ -154,4 +161,5 @@ void voice_handle(DictionaryIterator *it) {}
 int voice_volume(void) { return 70; }
 void voice_set_volume(int volume) {}
 void voice_stop(void) {}
+void voice_set_enabled(bool on) {}
 #endif

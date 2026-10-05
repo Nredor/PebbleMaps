@@ -14,3 +14,5 @@ void voice_handle(DictionaryIterator *it);
 int voice_volume(void);
 void voice_set_volume(int volume);   // saves it and plays a short beep at that level
 void voice_stop(void);
+// Only play phrases while voice is switched on
+void voice_set_enabled(bool on);

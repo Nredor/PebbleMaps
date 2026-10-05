@@ -125,6 +125,12 @@ function stepList(route, imperial) {
   });
 }
 
+// "Turn right" -> "turn right" (after "In 0.3 miles, ")
+function lowerFirst(t) {
+  t = String(t || '');
+  return /^[A-Z][a-z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+}
+
 // --- Navigator --------------------------------------------------------------
 var THRESH = {
   0: { soon: 450, now: 80, off: 60 },   // drive
@@ -336,7 +342,10 @@ Navigator.prototype.update = function (pos, accuracy) {
   var soonAt = step && step.transit ? 700 : th.soon;
   var nowAt = step && step.transit ? 200 : th.now;
   // voice: the "soon" line uses the alert distance so it can be prepared in advance
-  var soonText = 'In ' + brief.spokenDistance(fmt.distance(soonAt, imperial, true)) + ', ' + say;
+  this.lastSay = say;
+  this.lastDistM = distM;
+  this.lastKeyName = alertKey;
+  var soonText = 'In ' + brief.spokenDistance(fmt.distance(soonAt, imperial, true)) + ', ' + lowerFirst(say);
   if (this.preparedKey !== alertKey) {
     this.preparedKey = alertKey;
     this.prepare([say, soonText]);
@@ -352,7 +361,7 @@ Navigator.prototype.update = function (pos, accuracy) {
   } else if (distM <= soonAt && !al.soon && (step ? step.endDist - step.startDist : 0) > soonAt * 1.3) {
     al.soon = true;
     flags |= P.NAV_FLAG.ALERT_SOON;
-    this.speak(distM > soonAt * 0.6 ? soonText : 'In ' + brief.spokenDistance(fmt.distance(distM, imperial, true)) + ', ' + say);
+    this.speak(distM > soonAt * 0.6 ? soonText : 'In ' + brief.spokenDistance(fmt.distance(distM, imperial, true)) + ', ' + lowerFirst(say));
   }
 
   if (distM <= soonAt * 1.15) flags |= P.NAV_FLAG.NEAR;
@@ -378,6 +387,15 @@ Navigator.prototype.update = function (pos, accuracy) {
     this.lastKey = key;
     this.send(dict);
   }
+};
+
+// What to say right now (when voice is switched on mid-drive)
+Navigator.prototype.currentPhrase = function () {
+  if (!this.lastSay) return 'Voice directions on';
+  var d = this.lastDistM || 0;
+  var th = THRESH[this.route.mode] || THRESH[0];
+  if (d <= th.now || this.lastKeyName === 'start') return this.lastSay;
+  return 'In ' + brief.spokenDistance(fmt.distance(d, this.settings.imperial, true)) + ', ' + lowerFirst(this.lastSay);
 };
 
 Navigator.prototype.noGps = function () {

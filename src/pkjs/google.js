@@ -66,8 +66,11 @@ function friendlyError(status, body, apiName) {
   if (all.indexOf('billing') >= 0) {
     return { code: P.ERR.API, title: 'Billing needed', text: 'Google needs billing turned on for your project (it stays free for normal use). See step 3 in Settings on your phone.' };
   }
+  if (all.indexOf('api_key_service_blocked') >= 0 || all.indexOf('are blocked') >= 0) {
+    return { code: P.ERR.API, title: 'Key is limited', blocked: true, text: 'Your key is set to only work with some services. In Google Cloud, open your key (Settings step 5) and tick ' + apiName + ' under API restrictions.' };
+  }
   if (all.indexOf('not been used') >= 0 || all.indexOf('is disabled') >= 0 || all.indexOf('service_disabled') >= 0 ||
-      all.indexOf('not authorized to use this api') >= 0 || all.indexOf('api_key_service_blocked') >= 0 ||
+      all.indexOf('not authorized to use this api') >= 0 ||
       all.indexOf('not activated') >= 0 || all.indexOf('this api project is not authorized') >= 0) {
     return { code: P.ERR.API, title: apiName + ' is off', text: 'Your key can\'t use the ' + apiName + ' yet. In Settings on your phone, do step 4 again (turn on the map services) and check step 5.' };
   }

@@ -726,9 +726,14 @@ var navState = null;
 var voiceOn = false;
 
 voice.onProblem(function (err) {
-  console.log('voice: ' + (err.text || err.title));
-  toast(err.code === P.ERR.NETWORK ? 'Voice: no connection' : 'Voice: turn on Text-to-Speech (Settings, step 4)');
+  console.log('voice: ' + (err.title || '') + ' ' + (err.text || ''));
+  var t = err.code === P.ERR.NETWORK ? 'Voice: no connection' :
+    err.blocked ? 'Voice: add Text-to-Speech to your key (Settings step 5)' :
+    / is off$/.test(err.title || '') ? 'Voice: turn on Text-to-Speech (Settings step 4)' :
+    'Voice: ' + (err.title || 'not working');
+  toast(t);
 });
+var voiceTimer = null;
 
 function navBaseZoom(mode) {
   return mode === P.MODE.DRIVE ? 16 : (mode === P.MODE.WALK ? 17 : 16);
@@ -1089,8 +1094,15 @@ function onMessage(e) {
       case CMD.NAV_VOICE:
         voiceOn = p.idx === 1;
         if (navState) navState.voice = voiceOn;
-        if (voiceOn) voice.reset();
-        if (voiceOn && navigator_ && navigator_.lastDict) voice.speak('Voice directions on');
+        clearTimeout(voiceTimer);
+        if (!voiceOn) { voice.cancel(); break; }
+        voice.reset();
+        // speak the current direction after a moment (so tapping past "voice" to "off" stays quiet)
+        voiceTimer = setTimeout(function () {
+          if (!voiceOn || Date.now() - voice.lastSpoke() < 3000) return;   // already talking
+          voice.speak(navigator_ && navigator_.lastSay ? navigator_.currentPhrase() : 'Voice directions on');
+        }, 2000);
+        if (navigator_ && navigator_.currentPhrase) voice.prepare([navigator_.currentPhrase()]);
         break;
       default:
         break;
