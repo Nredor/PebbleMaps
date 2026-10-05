@@ -183,14 +183,18 @@ static void mp_toggle(int row) {
 }
 
 // A small on/off switch
-static void draw_switch(GContext *ctx, GPoint c, bool on, bool hl) {
+static bool mp_disabled(int row) { return row > 0 && !g_app.pois_on; }
+
+static void draw_switch(GContext *ctx, GPoint c, bool on, bool hl, bool dim) {
   GRect r = GRect(c.x - 12, c.y - 7, 24, 14);
-  GColor track = on ? (hl ? GColorWhite : C_BLUE) : (hl ? PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite) : PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite));
+  GColor blue = dim ? PBL_IF_COLOR_ELSE(GColorDarkGray, C_BLUE) : C_BLUE;
+  GColor track = on ? (hl ? GColorWhite : (dim ? PBL_IF_COLOR_ELSE(GColorLightGray, C_BLUE) : C_BLUE))
+                    : PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite);
   graphics_context_set_fill_color(ctx, track);
   graphics_fill_rect(ctx, r, 7, GCornersAll);
   graphics_context_set_stroke_color(ctx, hl ? GColorWhite : C_DIVIDER);
   graphics_draw_round_rect(ctx, r, 7);
-  graphics_context_set_fill_color(ctx, on ? (hl ? C_BLUE : GColorWhite) : (hl ? C_BLUE : GColorBlack));
+  graphics_context_set_fill_color(ctx, on ? (hl ? blue : GColorWhite) : (hl ? blue : PBL_IF_COLOR_ELSE(dim ? GColorDarkGray : GColorBlack, GColorBlack)));
   graphics_fill_circle(ctx, GPoint(on ? r.origin.x + 17 : r.origin.x + 7, c.y), 4);
 }
 
@@ -347,11 +351,18 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   GColor sub_fg = hl ? GColorWhite : C_SUBTEXT;
 #ifdef PBL_COLOR
   bool keep_color = (icon == ICON_STAR);
+  // places menu with "Show places" off: the other rows are greyed out
+  bool dim = lw->kind == LW_MAPPLACES && mp_disabled(i->row);
+  if (dim) {
+    if (!hl) fg = sub_fg = GColorDarkGray;
+    icol = hl ? GColorWhite : GColorLightGray;
+  }
 #else
   bool keep_color = false;
+  bool dim = false;
 #endif
   GColor ic = (hl && !keep_color) ? GColorWhite : icol;
-  GColor bg = hl ? C_BLUE : C_BG;
+  GColor bg = hl ? (dim ? PBL_IF_COLOR_ELSE(GColorDarkGray, C_BLUE) : C_BLUE) : C_BG;
   int isz = g_fonts.level >= 1 ? 24 : 20;
 
 #ifdef PBL_ROUND
@@ -385,7 +396,7 @@ static void draw_row(GContext *ctx, const Layer *cell, MenuIndex *i, void *cb) {
   }
   int tw = b.size.w - tx - 4;
   if (lw->kind == LW_MAPPLACES) {
-    draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), mp_on(i->row), hl);
+    draw_switch(ctx, GPoint(b.size.w - 18, b.size.h / 2), mp_on(i->row), hl, dim);
     tw -= 34;
   }
   int sub_h = sub ? g_fonts.small_h : 0;
@@ -464,6 +475,7 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
       }
       break;
     case LW_MAPPLACES:
+      if (mp_disabled(i->row)) break;   // greyed out while places are off
       mp_toggle(i->row);
       menu_layer_reload_data(lw->menu);
       break;
@@ -481,6 +493,13 @@ static void select_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
     default:
       break;
   }
+}
+
+// Greyed-out rows get a grey highlight
+static void selection_changed(MenuLayer *m, MenuIndex new_index, MenuIndex old_index, void *ctx) {
+  ListWin *lw = ctx;
+  if (lw->kind != LW_MAPPLACES) return;
+  menu_layer_set_highlight_colors(m, mp_disabled(new_index.row) ? PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack) : C_BLUE, GColorWhite);
 }
 
 static void select_long_cb(MenuLayer *m, MenuIndex *i, void *ctx) {
@@ -537,6 +556,7 @@ static void window_load(Window *window) {
     .draw_separator = ui_draw_separator,
     .select_click = select_cb,
     .select_long_click = select_long_cb,
+    .selection_changed = selection_changed,
   });
   menu_layer_set_highlight_colors(lw->menu, C_BLUE, GColorWhite);
   menu_layer_set_click_config_onto_window(lw->menu, window);

@@ -84,30 +84,6 @@ function config() {
             'Turn off to save battery: the map then shows where you were when you opened it.',
           defaultValue: true
         },
-        {
-          type: 'toggle',
-          messageKey: 'driveMode',
-          label: 'Driving mode',
-          description: 'The main map turns with you and keeps you near the bottom, like the Google Maps app. ' +
-            'Off: north is always up.',
-          defaultValue: false
-        },
-        {
-          type: 'toggle',
-          messageKey: 'drivePois',
-          id: 'drivePois',
-          label: 'Places in driving mode',
-          description: 'Show restaurants, shops, parks and more as small colored dots while in driving mode.',
-          defaultValue: true
-        },
-        {
-          type: 'toggle',
-          messageKey: 'driveNames',
-          id: 'driveNames',
-          label: 'Place names in driving mode',
-          description: 'Label those places with their names.',
-          defaultValue: true
-        },
         { type: 'heading', defaultValue: 'Display', size: 4 },
         {
           type: 'select',
@@ -149,8 +125,12 @@ function config() {
             'Press Select (⋯) to switch to up/down, then left/right, then extra options. ' +
             'It goes back to normal after 5 seconds. On Pebble Time 2, drag the map with your finger, ' +
             'double-tap to zoom in, or press and hold to zoom out.<br><br>' +
-            '<strong>Places on the map:</strong> open the map controls (Up) and press Select (⋯) until the last page. ' +
-            'The bottom button opens Places on map: turn places and their names on or off, and pick which kinds ' +
+            '<strong>Following you:</strong> open the map controls (Up) and press Select (⋯) until the last page. ' +
+            'The top button switches between driving mode (the map turns with you), north up, and a plain map that ' +
+            'stays put. Each press also brings the map back to you. If you move the map yourself, it stays there ' +
+            'while you stand still and follows you again a few seconds after you start moving.<br><br>' +
+            '<strong>Places on the map:</strong> on that same page, ' +
+            'the bottom button opens Places on map: turn places and their names on or off, and pick which kinds ' +
             '(restaurants, coffee, ATMs...). ' +
             'On Pebble Time 2 and Round 2, tap a place for photos, hours and reviews.<br><br>' +
             '<strong>Place info:</strong> on a place, press Down (<strong>i</strong>) for photos, hours and reviews. ' +
@@ -210,13 +190,6 @@ function customFn() {
     var ud = (clayConfig.meta && clayConfig.meta.userData) || {};
     var style = clayConfig.getItemById('mapStyle');
     if (style && ud.color === false) style.hide();
-    // "Place names" only matters when places are shown at all
-    var pois = clayConfig.getItemById('drivePois'), names = clayConfig.getItemById('driveNames');
-    if (pois && names) {
-      var sync = function () { if (pois.get()) names.enable(); else names.disable(); };
-      pois.on('change', sync);
-      sync();
-    }
   });
 }
 

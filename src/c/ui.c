@@ -433,6 +433,16 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 4, 20, 36, 20);
       graphics_draw_arc(ctx, GRect(P(12, 3).x, P(12, 3).y, S(16), S(34)), GOvalScaleModeFitCircle, 0, TRIG_MAX_ANGLE);
       break;
+    case ICON_NORTH_UP: {
+      // a small arrow pointing up at an N
+      static const int8_t arrow[] = {20, 20, 29, 38, 20, 33, 11, 38};
+      poly(ctx, arrow, 4, true);
+      graphics_context_set_stroke_width(ctx, sw);
+      line(ctx, 13, 15, 13, 2);
+      line(ctx, 13, 2, 27, 15);
+      line(ctx, 27, 15, 27, 2);
+      break;
+    }
     case ICON_BAR: {
       // a cocktail glass
       static const int8_t cup[] = {6, 6, 34, 6, 20, 22};
@@ -960,6 +970,22 @@ void dots_layer_destroy(Layer *layer) {
 // ---------------------------------------------------------------------------
 static GColor or_default(GColor c, GColor def) { return c.argb ? c : def; }
 
+// A row of small dots, the current one filled blue
+static void strip_dots(GContext *ctx, int cx, int y, int page, int pages) {
+  int dx0 = cx - (pages - 1) * 3;
+  for (int i = 0; i < pages; i++) {
+    GPoint d = GPoint(dx0 + i * 6, y);
+    if (i == page) {
+      graphics_context_set_fill_color(ctx, C_BLUE);
+      graphics_fill_circle(ctx, d, 2);
+    } else {
+      graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
+      graphics_context_set_stroke_width(ctx, 1);
+      graphics_draw_circle(ctx, d, 2);
+    }
+  }
+}
+
 void draw_action_strip(GContext *ctx, GRect bounds, const StripIcons *ic) {
   int w = STRIP_W;
   int cx;
@@ -991,20 +1017,8 @@ void draw_action_strip(GContext *ctx, GRect bounds, const StripIcons *ic) {
       draw_fab(ctx, GPoint(cx, cy), w >= 36 ? 15 : 12, ic->select, or_default(ic->select_color, C_BLUE));
     }
   }
-  if (ic->pages > 1) {
-    int dx0 = cx - (ic->pages - 1) * 3;
-    for (int i = 0; i < ic->pages; i++) {
-      GPoint d = GPoint(dx0 + i * 6, cy + 13);
-      if (i == ic->page) {
-        graphics_context_set_fill_color(ctx, C_BLUE);
-        graphics_fill_circle(ctx, d, 2);
-      } else {
-        graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
-        graphics_context_set_stroke_width(ctx, 1);
-        graphics_draw_circle(ctx, d, 2);
-      }
-    }
-  }
+  if (ic->up_pages > 1) strip_dots(ctx, cx, cy - dy + isz / 2 + 6, ic->up_page, ic->up_pages);
+  if (ic->pages > 1) strip_dots(ctx, cx, cy + 13, ic->page, ic->pages);
   if (ic->down) icon_draw(ctx, ic->down, GPoint(cx, cy + dy), isz, or_default(ic->down_color, C_ICON), C_BG);
 }
 

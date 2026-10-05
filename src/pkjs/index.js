@@ -43,7 +43,9 @@ var simTimer = null;
 var gpsTimer = null;
 var currentMapSeq = 0;
 var mapVisible = false;   // a map screen (not navigation) is showing on the watch
-var homeDrive = false;    // home map: "driving mode" (turns with you, you near the bottom) - a setting
+var followMode = 0;       // home map (watch button): 0 driving (turns with you), 1 follow north up, 2 plain map
+var homeDrive = true;     // driving mode: turns with you, you near the bottom
+var PAN_HOLD = 7000;      // after you move the map, how long before it follows you again (while you move)
 var poiMode = 1;          // places on the home map: 0 off, 1 dots, 2 dots with names (watch button)
 var DRIVE_AHEAD = 0.22;   // driving mode: how far below the middle your arrow sits (share of height)
 // Live location while a map is showing (off = battery saver: the spot when the map opened)
@@ -190,12 +192,7 @@ function meMarker(v) {
 
 // What the home map shows: the watch button's choice, limited in driving mode by the settings
 function placesShown() {
-  var m = watch.lowmem ? Math.min(poiMode, 1) : poiMode;   // Pebble Time / Time Round: dots only
-  if (homeDrive) {
-    if (!S.drivePois) return 0;
-    if (!S.driveNames) m = Math.min(m, 1);
-  }
-  return m;
+  return watch.lowmem ? Math.min(poiMode, 1) : poiMode;   // Pebble Time / Time Round: dots only
 }
 
 function poiMarkers(v) {
@@ -499,12 +496,12 @@ function onAdjust(p) {
       var q = geo.project(v.center[0], v.center[1], v.zoom);
       var wd = toWorld(dx, dy, v.heading || 0);
       v.center = geo.unproject(q[0] + wd[0], q[1] + wd[1], v.zoom);
-      if (home) st.follow = false;
+      if (home) { st.follow = false; st.lastPan = Date.now(); }
       break;
     }
     default:
       v = cloneView(st.base);
-      if (home) st.follow = true;
+      if (home) { st.follow = followMode !== 2; v = followView(v); }
       break;
   }
   if (home && st.follow) v = followView(v);
@@ -531,7 +528,8 @@ function onHomeMap(p) {
   var size = clampSize(p.width, p.height);
   var zoom = p.idx > 0 ? p.idx : 15;
   var restore = ((p.mode || 0) & 1) === 1;
-  homeDrive = !!S.driveMode;
+  followMode = ((p.mode || 0) >> 1) & 3;
+  homeDrive = followMode === 0;
   setMapVisible(true);
   getLocation(20000, function (err, loc) {
     if (err) return sendError(err);
@@ -638,6 +636,11 @@ function liveUpdate() {
   if (!mapVisible || navState) return;
   var st = views[lastKind];
   if (!st || !st.markers) return;
+  // you moved the map: it stays there while you stand still, and follows you again
+  // once you're on the move (a few seconds after your last touch)
+  if (lastKind === 'home' && !st.follow && followMode !== 2 && live.moving && Date.now() - (st.lastPan || 0) > PAN_HOLD) {
+    st.follow = true;
+  }
   if (lastKind === 'home' && st.follow && me) {
     var v = st.view, t = followView(v), need = false;
     if (angleDiff(v.heading || 0, t.heading || 0) > 12) need = true;
@@ -680,7 +683,7 @@ function poiCategory(t) {
   return CAT_OTHER;
 }
 
-var poiMask = (1 << 0) | (1 << 1) | (1 << 4) | (1 << CAT_OTHER);   // the watch sends its choice
+var poiMask = (1 << 0) | (1 << 1) | (1 << 12) | (1 << CAT_OTHER);   // the watch sends its choice
 
 function enabledCats() {
   var out = [];
@@ -1594,6 +1597,20 @@ function onMessage(e) {
         }
         break;
       }
+      case CMD.FOLLOW_MODE: {
+        // driving / north up / plain map: each change brings the map back to you
+        followMode = p.idx || 0;
+        homeDrive = followMode === 0;
+        var fs = views.home;
+        if (fs && lastKind === 'home' && fs.markers) {
+          if (p.seq !== undefined) fs.seq = p.seq;
+          fs.follow = followMode !== 2;
+          fs.view = followView(fs.view);
+          streamMap(fs.seq, fs.view, fs.markers(fs.view));
+          maybeFetchPois(fs.view);
+        }
+        break;
+      }
       case CMD.SEARCH: onSearch(p); break;
       case CMD.NEARBY: onNearby(p); break;
       case CMD.AUTOCOMPLETE: onAutocomplete(p); break;
@@ -1685,15 +1702,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
   updateTracking();
   var hs = views.home;
   if (hs && lastKind === 'home' && mapVisible && hs.markers) {
-    if (homeDrive !== !!S.driveMode) {
-      // driving mode switched on or off in Settings: redraw the map that way
-      homeDrive = !!S.driveMode;
-      hs.follow = true;
-      hs.view = followView(hs.view);
-      streamMap(hs.seq, hs.view, hs.markers(hs.view));
-    } else {
-      sendMarkers(hs, true);
-    }
+    sendMarkers(hs, true);
     maybeFetchPois(hs.view);
   }
   if (google.hasKey() && S.apiKey !== oldKey) {

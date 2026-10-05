@@ -34,6 +34,7 @@ enum {
   CMD_INFO = 25,
   CMD_PHOTO = 26,
   CMD_POI_MODE = 27,
+  CMD_FOLLOW_MODE = 28,
   // phone -> watch
   CMD_STATUS = 100,
   CMD_LIST = 101,

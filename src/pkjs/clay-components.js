@@ -200,6 +200,33 @@ module.exports = [
           if (input) input.addEventListener('input', refresh);
           refresh();
         }
+        // Once the key works, fold this section into one small button (like the instructions)
+        var section = root.parentElement;
+        var have = item ? String(item.get() || '').trim() : '';
+        var ud = (clay.meta && clay.meta.userData) || {};
+        var works = !!have && !!ud.keyOk;
+        try { if (!!have && localStorage.getItem('pm-key-ok') === have) works = true; } catch (e) { /* no storage */ }
+        if (section && works) {
+          var mini = document.createElement('div');
+          mini.className = 'pm-hide-row';
+          mini.innerHTML = '<button type="button" class="pm-show">Show Maps key</button>';
+          var hideRow = document.createElement('div');
+          hideRow.className = 'pm-hide-row';
+          hideRow.innerHTML = '<button type="button" class="pm-hide">Hide Maps key</button>';
+          section.appendChild(hideRow);
+          section.appendChild(mini);
+          var fold = function (on) {
+            Array.prototype.forEach.call(section.children, function (ch) {
+              if (ch !== mini) ch.style.display = on ? 'none' : '';
+            });
+            mini.style.display = on ? 'block' : 'none';
+            if (on) section.classList.add('pm-folded');
+            else section.classList.remove('pm-folded');
+          };
+          mini.querySelector('button').addEventListener('click', function () { fold(false); });
+          hideRow.querySelector('button').addEventListener('click', function () { fold(true); });
+          fold(true);
+        }
       });
     }
   },

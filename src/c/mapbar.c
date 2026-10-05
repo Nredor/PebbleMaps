@@ -107,6 +107,8 @@ void mapbar_draw(MapBar *mb, GContext *ctx, GRect bounds) {
       ic.up = mb->extra_up;
       ic.down = mb->extra_down;
       ic.up_color = mb->extra_up_color;
+      ic.up_page = mb->extra_up_page;
+      ic.up_pages = mb->extra_up_pages;
       ic.down_color = mb->extra_down_color;
       break;
   }

@@ -16,6 +16,10 @@ static bool s_hello_sent;
 static AppTimer *s_hello_timer;
 static int s_hello_tries;
 static char s_status[64] = "Connecting to phone";
+// How the map follows you: driving (turns with you), north up, or a plain map
+enum { FOLLOW_DRIVE = 0, FOLLOW_NORTH, FOLLOW_OFF, FOLLOW_COUNT };
+static int s_follow = FOLLOW_DRIVE;
+#define PERSIST_FOLLOW 8
 
 Window *home_window_get(void) { return s_window; }
 
@@ -49,7 +53,7 @@ static void send_hello(void) {
 static void request_map(bool restore) {
   poi_prefs_send();   // which places to draw
   GRect f = map_frame(layer_get_bounds(window_get_root_layer(s_window)));
-  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, restore ? 1 : 0);
+  map_request(CMD_HOME_MAP, f.size.w, f.size.h, 15, (restore ? 1 : 0) | (s_follow << 1));
   s_map_requested = true;
   strncpy(s_status, "Finding you", sizeof(s_status));
   dots_layer_set_running(s_dots, true);
@@ -246,9 +250,27 @@ static void start_search(void) {
 }
 
 // --- Map controls ------------------------------------------------------------
+static IconId follow_icon(void) {
+  return s_follow == FOLLOW_DRIVE ? ICON_NAV : (s_follow == FOLLOW_NORTH ? ICON_NORTH_UP : ICON_MAP);
+}
+
+// Driving -> north up -> plain map -> ...; every change also brings the map back to you
+static void cycle_follow(void) {
+  s_follow = (s_follow + 1) % FOLLOW_COUNT;
+  persist_write_int(PERSIST_FOLLOW, s_follow);
+  s_bar.extra_up = follow_icon();
+  s_bar.extra_up_page = s_follow;
+  OutMsg m;
+  comm_msg_init(&m, CMD_FOLLOW_MODE);
+  m.idx = s_follow;
+  m.seq = g_map.seq;
+  comm_send(&m);
+  ui_toast(s_window, s_follow == FOLLOW_DRIVE ? "Driving mode" : (s_follow == FOLLOW_NORTH ? "Follow me, north up" : "Map only"));
+}
+
 static void bar_cb(MapBarEvent ev, void *ctx) {
   if (ev == MB_EV_EXTRA_UP) {
-    map_adjust(ADJ_RESET, 0, 0);
+    cycle_follow();
   } else if (ev == MB_EV_EXTRA_DOWN) {
     // places on the map: which kinds, names, on/off
     mapbar_close(&s_bar);
@@ -337,7 +359,10 @@ static void window_load(Window *window) {
   s_dots = dots_layer_create(GRect(0, mf.size.h / 2 - 20, mf.size.w, 40));
   layer_add_child(root, s_dots);
   dots_layer_set_running(s_dots, true);
-  mapbar_init(&s_bar, s_canvas, mf.size, ICON_MYLOC, ICON_POI_NAMES, bar_cb, NULL);
+  if (persist_exists(PERSIST_FOLLOW)) s_follow = clampi(persist_read_int(PERSIST_FOLLOW), 0, FOLLOW_COUNT - 1);
+  mapbar_init(&s_bar, s_canvas, mf.size, follow_icon(), ICON_POI_NAMES, bar_cb, NULL);
+  s_bar.extra_up_page = s_follow;
+  s_bar.extra_up_pages = FOLLOW_COUNT;
   s_bar.extra_up_color = C_BLUE;
   s_bar.extra_down_color = C_ICON;
   maptouch_init(&s_touch, mf, map_tap, NULL, &s_bar);

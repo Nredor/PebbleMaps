@@ -47,7 +47,7 @@ GColor map_cat_color(int cat) {
 void poi_prefs_load(void) {
   g_app.pois_on = true;
   g_app.poi_names = !PM_LOWMEM;
-  g_app.poi_mask = (1 << 0) | (1 << 1) | (1 << 4) | (1 << MAP_CAT_OTHER);   // restaurants, coffee, parks, other
+  g_app.poi_mask = (1 << 0) | (1 << 1) | (1 << 12) | (1 << MAP_CAT_OTHER);   // restaurants, coffee, bars, other
   if (persist_exists(PERSIST_POI_PREFS)) {
     int v = persist_read_int(PERSIST_POI_PREFS);
     g_app.pois_on = v & 1;

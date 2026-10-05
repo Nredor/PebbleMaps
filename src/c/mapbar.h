@@ -16,6 +16,7 @@ typedef struct {
   GSize frame;            // map area size (pan step)
   IconId extra_up, extra_down;
   GColor extra_up_color, extra_down_color;
+  int extra_up_page, extra_up_pages;     // option dots under the extra Up button
   MapBarCallback cb;
   void *ctx;
 } MapBar;
