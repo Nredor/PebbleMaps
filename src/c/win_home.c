@@ -53,6 +53,25 @@ static void send_hello(void) {
   s_hello_sent = true;
 }
 
+// "Finding you" that gets no answer: ask again after a few seconds, then give it longer
+static AppTimer *s_find_timer;
+static int s_find_tries;
+static void request_map(bool restore);
+
+static void find_timer_cb(void *ctx) {
+  s_find_timer = NULL;
+  if (g_map.complete || g_map.chunk_img >= 0 || window_stack_get_top_window() != s_window) return;   // it's arriving
+  s_find_tries++;
+  request_map(true);
+  strncpy(s_status, "Still finding you", sizeof(s_status));
+  layer_mark_dirty(s_canvas);
+}
+
+static void find_watch_stop(void) {
+  if (s_find_timer) app_timer_cancel(s_find_timer);
+  s_find_timer = NULL;
+}
+
 // restore = keep the last view the user moved to (when coming back to this screen)
 static void request_map(bool restore) {
   poi_prefs_send();   // which places to draw
@@ -61,6 +80,10 @@ static void request_map(bool restore) {
   s_map_requested = true;
   strncpy(s_status, "Finding you", sizeof(s_status));
   dots_layer_set_running(s_dots, true);
+  // 6 s, then 15 s, then 30 s between tries
+  find_watch_stop();
+  if (s_find_tries < 4) s_find_timer = app_timer_register(s_find_tries == 0 ? 6000 : (s_find_tries == 1 ? 15000 : 30000),
+                                                          find_timer_cb, NULL);
 }
 
 static void hello_timer_cb(void *ctx) {
@@ -114,6 +137,7 @@ static void handle(int cmd, DictionaryIterator *it, void *ctx) {
       dots_layer_set_running(s_dots, false);
       break;
     case CMD_ERROR:
+      find_watch_stop();
       dots_layer_set_running(s_dots, false);
       s_status[0] = 0;
       layer_mark_dirty(s_canvas);
@@ -433,6 +457,7 @@ static void window_appear(Window *window) {
   map_set_observer(s_canvas);
   if (TOUCH_HW && g_app.touch) touch_service_subscribe(touch_cb, NULL);
   if (g_app.status_known && g_app.configured) {
+    s_find_tries = 0;
     request_map(s_map_requested);
   } else if (!s_hello_timer && !g_app.status_known) {
     send_hello();
@@ -441,6 +466,7 @@ static void window_appear(Window *window) {
 }
 
 static void window_disappear(Window *window) {
+  find_watch_stop();
   comm_clear_handler(handle);
   comm_cmd(CMD_CANCEL);   // map not showing: the phone can rest the GPS
   map_set_observer(NULL);

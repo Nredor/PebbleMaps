@@ -117,6 +117,11 @@ var LOCATION_ERROR = {
   text: 'Your phone couldn\'t find your location. Make sure Location is turned on and the Pebble app is allowed to use it.'
 };
 
+// Where you are. Phones sometimes never answer a location request, so if there's no answer
+// after a few seconds we ask again (a rougher or slightly older fix is fine), then once more
+// with longer to try, before giving up. Everyone asking meanwhile shares the answer.
+var locWait = null;
+
 function getLocation(maxAge, cb) {
   if (dev.simLocation) {
     me = me || dev.simLocation.slice();
@@ -124,20 +129,40 @@ function getLocation(maxAge, cb) {
     return cb(null, me);
   }
   if (me && Date.now() - meTime < maxAge) return cb(null, me);
-  var answered = false;
-  navigator.geolocation.getCurrentPosition(function (pos) {
-    if (answered) return;
-    answered = true;
-    me = [pos.coords.latitude, pos.coords.longitude];
-    meAcc = pos.coords.accuracy || 50;
-    meTime = Date.now();
-    cb(null, me);
-  }, function () {
-    if (answered) return;
-    answered = true;
-    if (me) return cb(null, me);  // fall back to the last known spot
-    cb(LOCATION_ERROR);
-  }, { enableHighAccuracy: true, maximumAge: Math.min(maxAge, 60000), timeout: 15000 });
+  if (locWait) { locWait.cbs.push(cb); return; }
+  var w = locWait = { cbs: [cb], timers: [] };
+  function finish(err, loc) {
+    if (locWait !== w) return;
+    locWait = null;
+    w.timers.forEach(clearTimeout);
+    w.cbs.forEach(function (f) { f(err, loc); });
+  }
+  function ask(high, age, timeout) {
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      me = [pos.coords.latitude, pos.coords.longitude];
+      meAcc = pos.coords.accuracy || 50;
+      meTime = Date.now();
+      finish(null, me);
+    }, function (e) {
+      if (me) return finish(null, me);   // fall back to the last known spot
+      if (e && e.code === 1) finish(LOCATION_ERROR);   // location turned off for the Pebble app
+      // otherwise keep waiting for the other tries
+    }, { enableHighAccuracy: high, maximumAge: age, timeout: timeout });
+  }
+  ask(true, Math.min(maxAge, 60000), 15000);
+  w.timers.push(setTimeout(function () { ask(false, 600000, 10000); }, 4000));
+  w.timers.push(setTimeout(function () { ask(true, 600000, 30000); }, 15000));
+  w.timers.push(setTimeout(function () { finish(me ? null : LOCATION_ERROR, me); }, 50000));
+}
+
+// A fix from live tracking answers anyone still waiting
+function locationArrived() {
+  if (locWait && me) {
+    var w = locWait;
+    locWait = null;
+    w.timers.forEach(clearTimeout);
+    w.cbs.forEach(function (f) { f(null, me); });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +643,7 @@ function onLiveFix(p, acc, cHeading, cSpeed, t) {
   me = p;
   meAcc = acc;
   meTime = t;
+  locationArrived();
   var prev = live.prev;
   var moved = prev ? geo.haversine(prev.p, p) : 0;
   var dt = prev ? (t - prev.t) / 1000 : 0;

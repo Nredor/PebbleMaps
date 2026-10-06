@@ -418,7 +418,6 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
       line(ctx, 39, 16, 39, 24);
       break;
     }
-    case ICON_VOL_UP:
     case ICON_INFO:
       // lowercase "i" in a ring
       graphics_context_set_stroke_width(ctx, sw);
@@ -481,6 +480,7 @@ void icon_draw(GContext *ctx, IconId id, GPoint c, int size, GColor fg, GColor b
                          GTextOverflowModeFill, GTextAlignmentCenter, NULL);
       break;
     }
+    case ICON_VOL_UP:
     case ICON_VOL_DOWN: {
       static const int8_t spk2[] = {2, 14, 9, 14, 18, 6, 18, 34, 9, 26, 2, 26};
       poly(ctx, spk2, 6, true);

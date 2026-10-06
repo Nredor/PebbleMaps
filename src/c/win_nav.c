@@ -259,19 +259,38 @@ static void draw_arrived(GContext *ctx, GRect b) {
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
+// What Up and Down do on the first two option pages.
+// Buttons: map controls + heading / hide cards + alerts. Touch: alerts + heading / map controls + hide cards.
+enum { ACT_MOVE, ACT_HEADING, ACT_CARDS, ACT_ALERT };
+static void page_acts(int kind, int a[2]) {
+  bool touch_layout = !g_app.buttons_ui;
+  if (kind == PAGE_VIEW) { a[0] = touch_layout ? ACT_ALERT : ACT_MOVE; a[1] = ACT_HEADING; }
+  else if (touch_layout) { a[0] = ACT_MOVE; a[1] = ACT_CARDS; }
+  else { a[0] = ACT_CARDS; a[1] = ACT_ALERT; }
+}
+static void act_icon(int act, IconId *icon, GColor *color) {
+  switch (act) {
+    case ACT_MOVE: *icon = ICON_MOVE; break;
+    case ACT_HEADING: *icon = s_heading_up ? ICON_HEADING : ICON_NORTH; *color = C_BLUE; break;
+    case ACT_CARDS: *icon = s_cards_hidden ? ICON_EYE : ICON_EYE_OFF; break;
+    default:
+      *icon = s_alert_mode == ALERT_OFF ? ICON_MUTE : (s_alert_mode == ALERT_VOICE ? ICON_SOUND : ICON_VIBRATE);
+      *color = s_alert_mode == ALERT_OFF ? C_RED : (s_alert_mode == ALERT_VOICE ? C_BLUE : C_ICON);
+      break;
+  }
+}
+
 static void draw_menu(GContext *ctx, GRect b) {
   StripIcons ic = { .select = ICON_MORE, .select_plain = true, .page = s_menu_page, .pages = menu_pages() };
   switch (page_kind(s_menu_page)) {
     case PAGE_VIEW:
-      ic.up = ICON_MOVE;
-      ic.down = s_heading_up ? ICON_HEADING : ICON_NORTH;
-      ic.down_color = C_BLUE;
+    case PAGE_CARDS: {
+      int a[2];
+      page_acts(page_kind(s_menu_page), a);
+      act_icon(a[0], &ic.up, &ic.up_color);
+      act_icon(a[1], &ic.down, &ic.down_color);
       break;
-    case PAGE_CARDS:
-      ic.up = s_cards_hidden ? ICON_EYE : ICON_EYE_OFF;
-      ic.down = s_alert_mode == ALERT_OFF ? ICON_MUTE : (s_alert_mode == ALERT_VOICE ? ICON_SOUND : ICON_VIBRATE);
-      ic.down_color = s_alert_mode == ALERT_OFF ? C_RED : (s_alert_mode == ALERT_VOICE ? C_BLUE : C_ICON);
-      break;
+    }
     case PAGE_VOLUME:
       ic.up = ICON_VOL_UP;
       ic.down = ICON_VOL_DOWN;
@@ -320,7 +339,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 static void end_nav(void) {
   voice_set_enabled(false);
   comm_cmd(CMD_NAV_STOP);
-  window_stack_remove(s_window, true);
+  pop_to_home();   // straight back to the main map (route and place screens close too)
 }
 
 static void set_overview(bool on);
@@ -420,23 +439,24 @@ static void menu_action(ButtonId b) {
   menu_poke();
   if (b == BUTTON_ID_SELECT) {
     s_menu_page = (s_menu_page + 1) % menu_pages();
-  } else if (page_kind(s_menu_page) == PAGE_VIEW) {
-    if (b == BUTTON_ID_UP) {
-      // map controls replace the options bar
-      if (s_menu_timer) { app_timer_cancel(s_menu_timer); s_menu_timer = NULL; }
-      mapbar_open(&s_bar);
-    } else {
-      toggle_heading();
+  } else if (page_kind(s_menu_page) == PAGE_VIEW || page_kind(s_menu_page) == PAGE_CARDS) {
+    int a[2];
+    page_acts(page_kind(s_menu_page), a);
+    switch (a[b == BUTTON_ID_UP ? 0 : 1]) {
+      case ACT_MOVE:
+        // map controls replace the options bar
+        if (s_menu_timer) { app_timer_cancel(s_menu_timer); s_menu_timer = NULL; }
+        mapbar_open(&s_bar);
+        break;
+      case ACT_HEADING: toggle_heading(); break;
+      case ACT_CARDS:
+        s_cards_hidden = !s_cards_hidden;
+        ui_toast(s_window, s_cards_hidden ? "Cards hidden until the next turn" : "Cards shown");
+        break;
+      default: toggle_mute(); break;
     }
   } else if (page_kind(s_menu_page) == PAGE_VOLUME) {
     change_volume(b == BUTTON_ID_UP ? 10 : -10);
-  } else if (page_kind(s_menu_page) == PAGE_CARDS) {
-    if (b == BUTTON_ID_UP) {
-      s_cards_hidden = !s_cards_hidden;
-      ui_toast(s_window, s_cards_hidden ? "Cards hidden until the next turn" : "Cards shown");
-    } else {
-      toggle_mute();
-    }
   } else {
     if (b == BUTTON_ID_UP) {
       menu_close();
