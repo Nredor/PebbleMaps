@@ -11,7 +11,7 @@
   ],
   "private": true,
   "dependencies": {
-    "jpeg-js": "^0.4.4",
+    "jpeg-js": "^0.3.7",
     "tiny-inflate": "^1.0.3"
   },
   "pebble": {
