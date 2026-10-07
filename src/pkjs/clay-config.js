@@ -7,6 +7,17 @@ function config() {
     {
       type: 'section',
       items: [
+        { type: 'heading', defaultValue: '🧭 Navigate now', size: 4 },
+        {
+          type: 'text',
+          defaultValue: 'Type an address or place and tap <strong>Navigate now</strong> to start navigation on your watch using your default travel mode.'
+        },
+        { type: 'pmnavigatenow', messageKey: 'navigateNow' }
+      ]
+    },
+    {
+      type: 'section',
+      items: [
         { type: 'heading', defaultValue: '★ Favorites', size: 4 },
         {
           type: 'text',

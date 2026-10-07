@@ -22,21 +22,38 @@ function timers() {
 }
 
 function phone() {
-  const clock = timers(), messages = [], routes = [], autocomplete = [], details = [], fixes = [], watches = [], stopped = [];
+  const clock = timers(), messages = [], routes = [], autocomplete = [], details = [], fixes = [], watches = [], stopped = [], recents = [];
   const dev = { simLocation: [0, 0] };
   const S = { apiKey: 'dummy', defaultMode: 0, allModeTimes: true, liveLocation: false };
-  function Clay() { this.registerComponent = () => {}; }
+  function Clay() {
+    this.registerComponent = () => {};
+    this.getSettings = resp => {
+      try {
+        return JSON.parse(decodeURIComponent(resp));
+      } catch (e) {
+        return {};
+      }
+    };
+  }
+  let keyOk = true;
   const google = {
-    hasKey: () => true,
+    hasKey: () => keyOk,
+    setKey: () => {},
     computeRoute: (...args) => routes.push({ mode: args[2], cb: args.at(-1) }),
     autocomplete: (...args) => autocomplete.push(args.at(-1)),
-    placeDetails: (id, token, cb) => details.push({ id, token, cb })
+    placeDetails: (id, token, cb) => details.push({ id, token, cb }),
+    geocode: (addr, cb) => cb(null, { lat: 10, lng: 20, address: addr })
   };
   const mocks = {
-    './image': {}, './google': google, './settings': { get: () => S, findFavorite: () => -1, favorites: () => [] },
+    './image': {}, './google': google,
+    './settings': {
+      get: () => S, findFavorite: () => -1, favorites: () => [],
+      readClay: () => ({}), writeClay: () => {},
+      addRecent: r => recents.push(r)
+    },
     './vendor/clay': Clay, './clay-components': [], './clay-config': { config: () => [] }, './dev': dev,
     'jpeg-js/lib/decoder': () => {}, './msg': { send: d => messages.push(d), drop() {}, pending: () => 0 },
-    './tiles': { get() {}, styleKey: () => '' }, './voice': { onProblem() {}, cancel() {} }
+    './tiles': { get() {}, styleKey: () => '', clear() {} }, './voice': { onProblem() {}, cancel() {} }
   };
   const context = {
     module: { exports: {} }, require: n => mocks[n] || require(path.resolve(root, n)),
@@ -51,8 +68,10 @@ function phone() {
   };
   vm.runInNewContext(fs.readFileSync(root + '/index.js', 'utf8'), context);
   context.dest = { lat: 0, lng: 0.01, name: 'Destination' };
-  return { context, clock, messages, routes, autocomplete, details, fixes, watches, stopped, dev, S,
-    send: p => context.module.exports._test.onMessage({ payload: p }) };
+  return { context, clock, messages, routes, autocomplete, details, fixes, watches, stopped, dev, S, recents,
+    send: p => context.module.exports._test.onMessage({ payload: p }),
+    closeWebview: resp => context.module.exports._test.onWebviewClosed({ response: resp }),
+    setHasKey: v => { keyOk = v; } };
 }
 
 function apiRoute() {
@@ -164,3 +183,61 @@ test('a fix without a usable timestamp or with poor accuracy still shows where y
   q.fixes[0].ok({ timestamp: Math.floor(Date.now() / 1000), coords: { latitude: 1, longitude: 2, accuracy: 20 } });
   assert.deepEqual(Array.from(loc2), [1, 2]);
 });
+
+test('navigateNow in webviewclosed sets destination, adds recent, and requests watch navigation start', () => {
+  const p = phone();
+  p.S.defaultMode = 1; // Walk
+  p.closeWebview(encodeURIComponent(JSON.stringify({
+    navigateNow: { value: JSON.stringify({ name: 'Central Park', address: 'Central Park, NY' }) }
+  })));
+  assert.equal(p.context.dest.name, 'Central Park');
+  assert.equal(p.context.dest.address, 'Central Park, NY');
+  assert.ok(p.recents.some(r => r.name === 'Central Park'));
+  // Phone sends CMD_NAV_START to watch with default travel mode
+  const navMsg = p.messages.find(m => m.cmd === P.CMD.NAV_START);
+  assert.ok(navMsg);
+  assert.equal(navMsg.mode, 1);
+
+  // Watch responds with CMD_NAV_START to begin navigation
+  p.context.dest.lat = 40.78; p.context.dest.lng = -73.96;
+  start(p, 1);
+  assert.equal(p.routes.length, 1);
+  assert.equal(p.routes[0].mode, 1);
+});
+
+test('regular settings save without navigateNow does not send NAV_START to watch', () => {
+  const p = phone();
+  p.closeWebview(encodeURIComponent(JSON.stringify({
+    defaultMode: '2'
+  })));
+  assert.ok(!p.messages.some(m => m.cmd === P.CMD.NAV_START));
+});
+
+test('navigateNow with a picked suggestion looks the place up by id with the typing session token', () => {
+  const p = phone();
+  p.closeWebview(encodeURIComponent(JSON.stringify({
+    navigateNow: { value: JSON.stringify({ name: 'Kamppi', address: 'Kamppi, Helsinki', placeId: 'pid1', sessionToken: 'tok1' }) }
+  })));
+  assert.equal(p.details.length, 1);
+  assert.equal(p.details[0].id, 'pid1');
+  assert.equal(p.details[0].token, 'tok1');
+  assert.equal(p.recents.length, 0);   // not saved until the place is found
+  // the watch asks for navigation while the lookup is still running: both share it
+  start(p, 0);
+  assert.equal(p.details.length, 1);
+  p.details[0].cb(null, { lat: 60.17, lng: 24.93, name: 'Kamppi' });
+  assert.equal(p.recents.length, 1);
+  assert.equal(p.recents[0].lat, 60.17);
+  assert.equal(p.routes.length, 1);
+});
+
+test('navigateNow without a Google key shows an error instead of starting navigation', () => {
+  const p = phone();
+  p.setHasKey(false);
+  p.closeWebview(encodeURIComponent(JSON.stringify({
+    navigateNow: { value: JSON.stringify({ name: 'X', address: 'X' }) }
+  })));
+  assert.ok(!p.messages.some(m => m.cmd === P.CMD.NAV_START));
+  assert.ok(p.messages.some(m => m.cmd === P.CMD.ERROR && m.num === P.ERR.NO_KEY));
+});
+

@@ -1,7 +1,7 @@
 {
   "name": "pebble-maps",
   "author": "Tom Bolger",
-  "version": "1.19.1",
+  "version": "1.20.0",
   "keywords": [
     "pebble-app",
     "maps",
@@ -11,7 +11,7 @@
   ],
   "private": true,
   "dependencies": {
-    "jpeg-js": "^0.3.7",
+    "jpeg-js": "^0.4.4",
     "tiny-inflate": "^1.0.3"
   },
   "pebble": {
@@ -74,7 +74,8 @@
       "liveLocation",
       "disableTouch",
       "nonTouchUI",
-      "economical"
+      "economical",
+      "navigateNow"
     ],
     "resources": {
       "media": [

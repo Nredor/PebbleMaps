@@ -156,6 +156,13 @@ static void inbox_received(DictionaryIterator *it, void *ctx) {
         if (lvl != g_fonts.level || lvl == 3) ui_save_text_level(lvl);
       }
       break;
+    case CMD_NAV_START: {
+      int mode = tuple_int(it, MESSAGE_KEY_mode, g_app.default_mode);
+      if (mode < 0 || mode > 3) mode = g_app.default_mode;
+      pop_to_home();
+      nav_window_push(mode);
+      return;
+    }
     case CMD_MAP_BEGIN:
     case CMD_MAP_CHUNK:
     case CMD_MARKERS:

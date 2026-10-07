@@ -1839,11 +1839,12 @@ Pebble.addEventListener('showConfiguration', function () {
   Pebble.openURL(clay.generateUrl());
 });
 
-Pebble.addEventListener('webviewclosed', function (e) {
+function onWebviewClosed(e) {
   if (!e || !e.response) return;
   var oldKey = S.apiKey;
+  var parsed = null;
   try {
-    clay.getSettings(e.response, false);
+    parsed = clay.getSettings(e.response, false);
   } catch (ex) {
     console.log('settings parse error ' + ex);
     return;
@@ -1857,6 +1858,43 @@ Pebble.addEventListener('webviewclosed', function (e) {
   if (hs && lastKind === 'home' && mapVisible && hs.markers) {
     sendMarkers(hs, true);
     maybeFetchPois(hs.view);
+  }
+  var navRaw = parsed && parsed.navigateNow && (parsed.navigateNow.value !== undefined ? parsed.navigateNow.value : parsed.navigateNow);
+  var navData = null;
+  if (typeof navRaw === 'string' && navRaw.trim()) {
+    try { navData = JSON.parse(navRaw); } catch (ex) { navData = { name: navRaw, address: navRaw }; }
+  } else if (typeof navRaw === 'object' && navRaw) {
+    navData = navRaw;
+  }
+  var c = settings.readClay();
+  if (c.navigateNow) {
+    delete c.navigateNow;
+    settings.writeClay(c);
+  }
+  if (navData && (navData.address || navData.name)) {
+    if (!google.hasKey()) {
+      sendError({ code: P.ERR.NO_KEY, title: 'Key needed', text: 'Add your Google Maps key in Settings before using Navigate now.' });
+    } else {
+      dest = {
+        name: navData.name || navData.address,
+        address: navData.address || navData.name,
+        placeId: navData.placeId || '',
+        lat: navData.lat,
+        lng: navData.lng,
+        // a picked suggestion: exact place by id, billed in the same session as the typing
+        fromSuggest: !!navData.placeId,
+        suggestToken: navData.sessionToken || null
+      };
+      route = null;
+      var picked = dest;
+      // start finding the place now; the watch's NAV_START request shares this lookup
+      withDest(function (err, d) {
+        if (err) return console.log('Navigate now: ' + (err.text || err.message));
+        if (d === picked) settings.addRecent(d);
+      });
+      // the watch opens navigation and asks for the route with the default travel mode
+      send({ cmd: CMD.NAV_START, mode: S.defaultMode });
+    }
   }
   if (google.hasKey() && S.apiKey !== oldKey) {
     toast('Checking your key...');
@@ -1872,6 +1910,8 @@ Pebble.addEventListener('webviewclosed', function (e) {
       });
     });
   }
-});
+}
 
-module.exports = { _test: { onMessage: onMessage, state: function () { return { results: results, dest: dest, route: route }; } } };
+Pebble.addEventListener('webviewclosed', onWebviewClosed);
+
+module.exports = { _test: { onMessage: onMessage, onWebviewClosed: onWebviewClosed, state: function () { return { results: results, dest: dest, route: route }; } } };

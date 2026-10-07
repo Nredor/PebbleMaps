@@ -107,6 +107,25 @@ var THEME_CSS = [
   '.pm-fav .saved{font-size:12px;color:#1e8e3e;margin-top:2px;}',
   '.pm-favs .add{width:100%;background:#e8f0fe!important;color:#1a73e8!important;font-weight:600;padding:12px!important;margin:6px 0 0!important;}',
   '.pm-favs .empty{color:#5f6368;font-size:15px;text-align:center;padding:14px 4px;}',
+  // navigate now
+  '.pm-navnow{padding:4px 14px 14px;}',
+  '.pm-navnow .input-wrap{position:relative;margin:6px 0 10px;}',
+  '.pm-navnow input.dest-input{width:100%;box-sizing:border-box;background:#f8f9fa!important;border:1px solid #dadce0!important;border-radius:10px!important;padding:11px 36px 11px 12px!important;font-size:16px!important;color:#202124!important;font-family:inherit!important;-webkit-appearance:none;}',
+  '.pm-navnow input.dest-input:focus{border-color:#1a73e8!important;box-shadow:0 0 0 2px rgba(26,115,232,.2)!important;outline:none;}',
+  '.pm-navnow .clear-btn{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none!important;border:none!important;color:#70757a!important;font-size:16px!important;padding:6px!important;cursor:pointer;line-height:1;min-width:0!important;border-radius:50%!important;}',
+  '.pm-navnow .suggestions{background:#fff;border:1px solid #dadce0;border-radius:10px;box-shadow:0 4px 12px rgba(60,64,67,.15);max-height:220px;overflow-y:auto;margin:-4px 0 10px;padding:0;list-style:none;}',
+  '.pm-navnow .sugg-item{padding:10px 12px;border-bottom:1px solid #f1f3f4;cursor:pointer;text-align:left;}',
+  '.pm-navnow .sugg-item:last-child{border-bottom:none;}',
+  '.pm-navnow .sugg-item:hover,.pm-navnow .sugg-item:active{background:#e8f0fe;}',
+  '.pm-navnow .sugg-main{font-size:15px;font-weight:600;color:#202124;display:flex;align-items:center;gap:6px;}',
+  '.pm-navnow .sugg-pin{color:#ea4335;font-size:14px;flex-shrink:0;}',
+  '.pm-navnow .sugg-sec{font-size:13px;color:#5f6368;margin-top:2px;padding-left:20px;word-break:break-word;}',
+  '.pm-navnow .sugg-loading{padding:10px;font-size:14px;color:#5f6368;text-align:center;}',
+  '.pm-navnow .msg{font-size:14px;padding:8px 12px;border-radius:8px;margin:6px 0 10px;line-height:1.4;}',
+  '.pm-navnow .msg.err{background:#fce8e6;color:#a50e0e;}',
+  '.pm-navnow .msg.info{background:#e8f0fe;color:#174ea6;}',
+  '.pm-navnow .go-btn{width:100%;background:#1a73e8!important;color:#fff!important;font-size:16px!important;font-weight:600;padding:12px 16px!important;border:0!important;border-radius:22px!important;cursor:pointer;box-shadow:0 1px 3px rgba(26,115,232,.4);display:flex;align-items:center;justify-content:center;gap:8px;}',
+  '.pm-navnow .go-btn:active{background:#174ea6!important;}',
   '.pm-footer{color:#5f6368;font-size:13px;text-align:center;padding:16px 10px 0;line-height:1.5;}'
 ].join('\n');
 
@@ -701,6 +720,314 @@ module.exports = [
         if (inputs.length) inputs[inputs.length - 1].focus();
       });
       render();
+    }
+  },
+
+  // Navigate now component: autocomplete address input and Navigate now button
+  {
+    name: 'pmnavigatenow',
+    template: [
+      '<div class="pm-navnow">',
+      '<input type="hidden" class="pm-nav-value" data-manipulator-target>',
+      '<div class="input-wrap">',
+      '<input type="text" class="dest-input" placeholder="Search address or place" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">',
+      '<button type="button" class="clear-btn" style="display:none" title="Clear">✕</button>',
+      '</div>',
+      '<div class="suggestions" style="display:none"></div>',
+      '<div class="msg" style="display:none"></div>',
+      '<button type="button" class="go-btn">🧭 Navigate now</button>',
+      '</div>'
+    ].join(''),
+    manipulator: {
+      get: function () {
+        var el = this.$element[0];
+        return el._pmGet ? el._pmGet() : '';
+      },
+      set: function (value) {
+        var el = this.$element[0];
+        if (el._pmSet) el._pmSet(value);
+        return this;
+      },
+      hide: function () { this.$element.set('+hide'); return this; },
+      show: function () { this.$element.set('-hide'); return this; }
+    },
+    initialize: function (minified, clay) {
+      var root = this.$element[0];
+      var input = root.querySelector('.dest-input');
+      var clearBtn = root.querySelector('.clear-btn');
+      var suggBox = root.querySelector('.suggestions');
+      var msgBox = root.querySelector('.msg');
+      var goBtn = root.querySelector('.go-btn');
+      var hiddenVal = root.querySelector('.pm-nav-value');
+
+      var pendingNav = null;
+      var selectedPlace = null;
+      var timer = null;
+      var xhr = null;
+      var reqId = 0;
+      var lastQuery = '';
+      // Session token: typing + the final place lookup on the phone are billed as one session
+      function newToken() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+          var r = Math.random() * 16 | 0;
+          return (c === 'x' ? r : (r & 3 | 8)).toString(16);
+        });
+      }
+      var sessionToken = newToken();
+
+      function showMsg(kind, text) {
+        if (!text) {
+          msgBox.style.display = 'none';
+          msgBox.className = 'msg';
+          msgBox.textContent = '';
+        } else {
+          msgBox.className = 'msg ' + kind;
+          msgBox.textContent = text;
+          msgBox.style.display = 'block';
+        }
+      }
+
+      function getKey() {
+        var item = clay.getItemByMessageKey('apiKey');
+        var k = item ? String(item.get() || '').trim() : '';
+        if (!k) {
+          try {
+            var s = JSON.parse(localStorage.getItem('clay-settings') || '{}');
+            k = String(s.apiKey || '').trim();
+          } catch (e) {}
+        }
+        if (!k) {
+          var keyInp = document.querySelector('input[name="apiKey"]');
+          if (keyInp) k = String(keyInp.value || '').trim();
+        }
+        return k.replace(/\s+/g, '');
+      }
+
+      function hideSuggestions() {
+        suggBox.style.display = 'none';
+        suggBox.innerHTML = '';
+      }
+
+      function renderSuggestions(items) {
+        suggBox.innerHTML = '';
+        var valid = [];
+        (items || []).forEach(function (sg) {
+          var p = sg.placePrediction;
+          if (!p || !p.placeId) return;
+          var sf = p.structuredFormat || {};
+          var main = (sf.mainText && sf.mainText.text) || (p.text && p.text.text) || '';
+          var sec = (sf.secondaryText && sf.secondaryText.text) || '';
+          valid.push({ placeId: p.placeId, main: main, sec: sec });
+        });
+
+        if (!valid.length) {
+          suggBox.innerHTML = '<div class="sugg-loading">No places found</div>';
+          suggBox.style.display = 'block';
+          return;
+        }
+
+        valid.forEach(function (item) {
+          var row = document.createElement('div');
+          row.className = 'sugg-item';
+          var mainEl = document.createElement('div');
+          mainEl.className = 'sugg-main';
+          var pin = document.createElement('span');
+          pin.className = 'sugg-pin';
+          pin.textContent = '📍';
+          var mainText = document.createElement('span');
+          mainText.textContent = item.main || '';   // place names come from Google: never as HTML
+          mainEl.appendChild(pin);
+          mainEl.appendChild(mainText);
+          row.appendChild(mainEl);
+          if (item.sec) {
+            var secEl = document.createElement('div');
+            secEl.className = 'sugg-sec';
+            secEl.textContent = item.sec;
+            row.appendChild(secEl);
+          }
+          row.addEventListener('click', function () {
+            var full = item.main + (item.sec ? ', ' + item.sec : '');
+            input.value = full;
+            selectedPlace = {
+              name: item.main,
+              address: item.sec ? item.main + ', ' + item.sec : item.main,
+              placeId: item.placeId
+            };
+            clearBtn.style.display = 'block';
+            hideSuggestions();
+            showMsg('', '');
+          });
+          suggBox.appendChild(row);
+        });
+        suggBox.style.display = 'block';
+      }
+
+      function fetchSuggestions(query) {
+        var key = getKey();
+        if (!key) {
+          hideSuggestions();
+          showMsg('err', 'Please enter your Google Maps key below first.');
+          return;
+        }
+        showMsg('', '');
+        if (xhr) {
+          try { xhr.abort(); } catch (e) {}
+        }
+        suggBox.innerHTML = '<div class="sugg-loading">Finding places…</div>';
+        suggBox.style.display = 'block';
+
+        var myId = ++reqId;
+        var req = xhr = new XMLHttpRequest();
+        req.open('POST', 'https://places.googleapis.com/v1/places:autocomplete', true);
+        req.setRequestHeader('Content-Type', 'application/json');
+        req.setRequestHeader('X-Goog-Api-Key', key);
+        req.setRequestHeader('X-Goog-FieldMask', 'suggestions.placePrediction.placeId,suggestions.placePrediction.structuredFormat,suggestions.placePrediction.text,suggestions.placePrediction.distanceMeters');
+
+        var body = {
+          input: query,
+          languageCode: (typeof navigator !== 'undefined' && navigator.language) || 'en',
+          includeQueryPredictions: false,
+          sessionToken: sessionToken
+        };
+
+        var ud = (clay.meta && clay.meta.userData) || {};
+        if (ud.lat !== null && ud.lat !== undefined && ud.lng !== null && ud.lng !== undefined) {
+          body.locationBias = { circle: { center: { latitude: ud.lat, longitude: ud.lng }, radius: 30000 } };
+          body.origin = { latitude: ud.lat, longitude: ud.lng };
+        }
+
+        req.onload = function () {
+          if (myId !== reqId) return;   // a newer search is under way
+          if (req.status >= 200 && req.status < 300) {
+            try {
+              var res = JSON.parse(req.responseText);
+              lastQuery = query;
+              renderSuggestions(res.suggestions || []);
+            } catch (ex) {
+              hideSuggestions();
+            }
+          } else {
+            var errText = '';
+            try {
+              var errObj = JSON.parse(req.responseText);
+              errText = (errObj.error && errObj.error.message) || '';
+            } catch (e) {}
+            if (/api key not valid|key_invalid/i.test(errText)) {
+              showMsg('err', 'Google Maps key is invalid.');
+            } else if (/billing/i.test(errText)) {
+              showMsg('err', 'Google Cloud billing required. See step 3 below.');
+            } else if (/is disabled|service_disabled|not authorized|blocked/i.test(errText)) {
+              showMsg('err', 'Places API (New) is not enabled for your key. See steps 4 and 5 below.');
+            } else {
+              showMsg('err', 'Couldn\'t get suggestions' + (errText ? ': ' + errText : '.'));
+            }
+            hideSuggestions();
+          }
+        };
+        req.onerror = function () {
+          if (myId !== reqId) return;
+          hideSuggestions();
+          showMsg('err', 'Couldn\'t reach Google. Check your connection. You can still tap Navigate now.');
+        };
+        req.send(JSON.stringify(body));
+      }
+
+      function onInputChange() {
+        var val = String(input.value || '').trim();
+        clearBtn.style.display = val ? 'block' : 'none';
+        selectedPlace = null;
+        clearTimeout(timer);
+        if (val.length < 2) {
+          reqId++;   // ignore any answer still on its way
+          lastQuery = '';
+          hideSuggestions();
+          showMsg('', '');
+          return;
+        }
+        timer = setTimeout(function () {
+          fetchSuggestions(val);
+        }, 300);
+      }
+
+      input.addEventListener('input', onInputChange);
+      input.addEventListener('focus', function () {
+        // only search again if the text changed since the last list (each search is billed)
+        var val = String(input.value || '').trim();
+        if (val.length >= 2 && !selectedPlace && val !== lastQuery) fetchSuggestions(val);
+      });
+      // Enter in this box would otherwise submit the page as a plain "Save settings"
+      input.addEventListener('keydown', function (e) {
+        if (e.keyCode === 13 || e.key === 'Enter') {
+          e.preventDefault();
+          goBtn.click();
+        }
+      });
+      clearBtn.addEventListener('click', function () {
+        input.value = '';
+        clearBtn.style.display = 'none';
+        selectedPlace = null;
+        pendingNav = null;
+        hiddenVal.value = '';
+        hideSuggestions();
+        showMsg('', '');
+        input.focus();
+      });
+
+      document.addEventListener('click', function (e) {
+        if (!root.contains(e.target)) {
+          hideSuggestions();
+        }
+      });
+
+      goBtn.addEventListener('click', function () {
+        var text = String(input.value || '').trim();
+        if (!text) {
+          showMsg('err', 'Please enter a destination address first.');
+          input.focus();
+          return;
+        }
+        var key = getKey();
+        if (!key) {
+          showMsg('err', 'Please enter your Google Maps key below first.');
+          return;
+        }
+        // a picked suggestion has a placeId (exact place); free text is looked up on the phone
+        var destObj = selectedPlace && selectedPlace.placeId
+          ? { name: selectedPlace.name, address: selectedPlace.address, placeId: selectedPlace.placeId, sessionToken: sessionToken }
+          : { name: text, address: text, placeId: '' };
+        pendingNav = destObj;
+        hiddenVal.value = JSON.stringify(pendingNav);
+        goBtn.disabled = true;
+
+        // Save all settings and close the page the same way Clay's own submit does
+        var returnTo = window.returnTo || 'pebblejs://close#';
+        var payload = null;
+        try { payload = clay.serialize(); } catch (e) { payload = null; }
+        if (!payload) payload = {};
+        payload.navigateNow = { value: JSON.stringify(pendingNav) };
+        window.location.href = returnTo + encodeURIComponent(JSON.stringify(payload));
+      });
+
+      root._pmGet = function () {
+        return pendingNav ? JSON.stringify(pendingNav) : '';
+      };
+      root._pmSet = function (val) {
+        if (!val) {
+          pendingNav = null;
+          input.value = '';
+          clearBtn.style.display = 'none';
+          hiddenVal.value = '';
+          return;
+        }
+        try {
+          var p = typeof val === 'string' ? JSON.parse(val) : val;
+          if (p && (p.name || p.address)) {
+            input.value = p.address || p.name || '';
+            clearBtn.style.display = input.value ? 'block' : 'none';
+            selectedPlace = p;
+          }
+        } catch (e) {}
+      };
     }
   }
 ];
