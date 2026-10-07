@@ -64,7 +64,7 @@ function friendlyError(status, body, apiName) {
     return { code: P.ERR.NO_KEY, title: 'Key not valid', text: 'Google says your Maps key isn\'t valid. Open Pebble Maps Settings on your phone and paste the key again.' };
   }
   if (all.indexOf('billing') >= 0) {
-    return { code: P.ERR.API, title: 'Billing needed', text: 'Google needs billing turned on for your project (it stays free for normal use). See step 3 in Settings on your phone.' };
+    return { code: P.ERR.API, title: 'Billing needed', text: 'Google needs billing turned on for your project. Usage beyond the free allowances can incur charges. See step 3 in Settings on your phone.' };
   }
   if (all.indexOf('api_key_service_blocked') >= 0 || all.indexOf('are blocked') >= 0) {
     return { code: P.ERR.API, title: 'Key is limited', blocked: true, text: 'Your key is set to only work with some services. In Google Cloud, open your key (Settings step 5) and tick ' + apiName + ' under API restrictions.' };

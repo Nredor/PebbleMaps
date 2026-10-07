@@ -19,6 +19,9 @@ var inbox = 2048;
 var failedOnce = false;
 var onProblem = null;
 var lastSpoke = 0;
+var generation = 0;
+var active = null;
+var playbackTimer = null;
 
 // --- base64 / WAV -----------------------------------------------------------------
 var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -106,6 +109,23 @@ function encode(samples) {
   return { data: out, samples: n, pred: startPred, index: startIndex };
 }
 
+// Keep all speech. Split at a quiet sample near the end of each small clip;
+// the watch acknowledges playback before the next clip is sent.
+function encodeClips(samples) {
+  var clips = [], start = 0, limit = MAX_BYTES * 2;
+  while (start < samples.length) {
+    var end = Math.min(samples.length, start + limit);
+    if (end < samples.length) {
+      for (var i = end - 1; i > end - 8000; i--) {
+        if (Math.abs(samples[i]) < 150) { end = i + 1; break; }
+      }
+    }
+    clips.push(encode(samples.subarray(start, end)));
+    start = end;
+  }
+  return clips;
+}
+
 // --- Google Text-to-Speech ---------------------------------------------------------------
 function synth(text, cb) {
   if (cache[text]) return cb(null, cache[text]);
@@ -115,7 +135,7 @@ function synth(text, cb) {
     var clip = null;
     if (!err) {
       try {
-        clip = encode(wavSamples(b64decode(b64)));
+        clip = encodeClips(wavSamples(b64decode(b64)));
         cache[text] = clip;
         order.push(text);
         while (order.length > CACHE) delete cache[order.shift()];
@@ -133,18 +153,35 @@ function synth(text, cb) {
   });
 }
 
-function sendClip(clip) {
+function sendClip(clip, id) {
   msg.drop('voice');                 // a newer phrase replaces one still waiting
-  clipId = clipId % 30000 + 1;
   var room = Math.max(200, inbox - 110);
   var total = clip.data.length;
   for (var off = 0; off < total; off += room) {
     var part = clip.data.subarray(off, Math.min(total, off + room));
-    var d = { cmd: P.CMD.VOICE, idx: clipId, offset: off, total: total, data: Array.prototype.slice.call(part),
+    var d = { cmd: P.CMD.VOICE, idx: id, offset: off, total: total, data: Array.prototype.slice.call(part),
               flags: off + room >= total ? 1 : 0 };
     if (off === 0) { d.num = clip.samples; d.num2 = clip.pred; d.mode = clip.index; }
     msg.send(d, 'voice');
   }
+}
+
+function cancel() {
+  generation++;
+  active = null;
+  clearTimeout(playbackTimer);
+  playbackTimer = null;
+  msg.drop('voice');
+}
+
+function nextClip() {
+  if (!active || !active.clips.length) { active = null; return; }
+  clipId = clipId % 30000 + 1;
+  active.id = clipId;
+  var id = clipId;
+  // A lost chunk/ack must not cause a later part of the instruction to play alone.
+  playbackTimer = setTimeout(function () { if (active && active.id === id) cancel(); }, 45000);
+  sendClip(active.clips.shift(), id);
 }
 
 module.exports = {
@@ -153,12 +190,25 @@ module.exports = {
   lastSpoke: function () { return lastSpoke; },
   speak: function (text) {
     if (!text) return;
+    cancel();
+    var request = generation;
     lastSpoke = Date.now();
-    synth(text, function (err, clip) { if (!err && clip) sendClip(clip); });
+    synth(text, function (err, clips) {
+      if (request !== generation || err || !clips || !clips.length) return;
+      active = { clips: clips.slice(), id: 0 };
+      nextClip();
+    });
   },
   prepare: function (texts) {
     (texts || []).forEach(function (t) { if (t) synth(t, function () {}); });
   },
   reset: function () { failedOnce = false; },
-  cancel: function () { msg.drop('voice'); }
+  completed: function (id, played) {
+    if (!active || active.id !== id) return;
+    if (played === false) { cancel(); return; }
+    clearTimeout(playbackTimer);
+    playbackTimer = null;
+    nextClip();
+  },
+  cancel: cancel
 };

@@ -1,0 +1,155 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const root = path.resolve(__dirname, '../src/pkjs');
+const P = require(root + '/protocol');
+const geo = require(root + '/geo');
+const nav = require(root + '/nav');
+
+function timers() {
+  let id = 0;
+  const pending = new Map();
+  return {
+    pending,
+    setTimeout(fn, ms) { pending.set(++id, { fn, ms }); return id; },
+    clearTimeout(id) { pending.delete(id); },
+    setInterval() { return ++id; },
+    clearInterval() {},
+    run(ms) { const entries = [...pending.entries()].filter(([, t]) => t.ms === ms); for (const [id, t] of entries) { pending.delete(id); t.fn(); } }
+  };
+}
+
+function phone() {
+  const clock = timers(), messages = [], routes = [], autocomplete = [], details = [], fixes = [], watches = [], stopped = [];
+  const dev = { simLocation: [0, 0] };
+  const S = { apiKey: 'dummy', defaultMode: 0, allModeTimes: true, liveLocation: false };
+  function Clay() { this.registerComponent = () => {}; }
+  const google = {
+    hasKey: () => true,
+    computeRoute: (...args) => routes.push({ mode: args[2], cb: args.at(-1) }),
+    autocomplete: (...args) => autocomplete.push(args.at(-1)),
+    placeDetails: (id, token, cb) => details.push({ id, token, cb })
+  };
+  const mocks = {
+    './image': {}, './google': google, './settings': { get: () => S, findFavorite: () => -1, favorites: () => [] },
+    './vendor/clay': Clay, './clay-components': [], './clay-config': { config: () => [] }, './dev': dev,
+    'jpeg-js/lib/decoder': () => {}, './msg': { send: d => messages.push(d), drop() {}, pending: () => 0 },
+    './tiles': { get() {}, styleKey: () => '' }, './voice': { onProblem() {}, cancel() {} }
+  };
+  const context = {
+    module: { exports: {} }, require: n => mocks[n] || require(path.resolve(root, n)),
+    Pebble: { addEventListener() {} }, console, Date, Math, Uint8Array,
+    setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    setInterval: clock.setInterval, clearInterval: clock.clearInterval,
+    navigator: { geolocation: {
+      getCurrentPosition: (ok, err, opts) => fixes.push({ ok, err, opts }),
+      watchPosition: (ok, err) => { watches.push({ ok, err }); return watches.length; },
+      clearWatch: id => stopped.push(id)
+    } }
+  };
+  vm.runInNewContext(fs.readFileSync(root + '/index.js', 'utf8'), context);
+  context.dest = { lat: 0, lng: 0.01, name: 'Destination' };
+  return { context, clock, messages, routes, autocomplete, details, fixes, watches, stopped, dev, S,
+    send: p => context.module.exports._test.onMessage({ payload: p }) };
+}
+
+function apiRoute() {
+  return { distanceMeters: 1112, duration: '100s', legs: [{ steps: [{
+    polyline: { encodedPolyline: geo.encodePolyline([[0, 0], [0, 0.01]]) },
+    distanceMeters: 1112, staticDuration: '100s'
+  }] }] };
+}
+function start(p, mode = 0) { p.send({ cmd: P.CMD.NAV_START, seq: 2 + mode, mode, width: 144, height: 168 }); }
+
+test('late route success after stop cannot start GPS or navigation', () => {
+  const p = phone(); start(p); p.send({ cmd: P.CMD.NAV_STOP }); p.dev.simLocation = null;
+  p.routes[0].cb(null, apiRoute());
+  assert.equal(p.context.navigator_, null); assert.equal(p.context.navState, null); assert.equal(p.watches.length, 0);
+});
+
+test('late route error after stop does not show an error on the home screen', () => {
+  const p = phone(); start(p); p.send({ cmd: P.CMD.NAV_STOP }); p.routes[0].cb({ text: 'Network failed' });
+  assert.equal(p.messages.filter(m => m.cmd === P.CMD.ERROR).length, 0);
+});
+
+test('restarting navigation keeps only the new session and its GPS watch', () => {
+  const p = phone(); start(p, 0); start(p, 1); p.dev.simLocation = null;
+  p.routes[1].cb(null, apiRoute()); const current = p.context.navigator_;
+  p.routes[0].cb(null, apiRoute());
+  assert.equal(p.context.navigator_, current); assert.equal(current.route.mode, 1); assert.equal(p.watches.length, 1);
+});
+
+test('old arrival timer cannot stop a new navigation session', () => {
+  const p = phone(); start(p); p.dev.simLocation = null; p.routes[0].cb(null, apiRoute());
+  p.context.navigator_.onArrive(); start(p, 1); p.routes[1].cb(null, apiRoute());
+  const current = p.context.navigator_; p.clock.run(1000); assert.equal(p.context.navigator_, current);
+});
+
+test('late reroute after stop cannot replace the cached route', () => {
+  const p = phone(); start(p); p.dev.simLocation = null; p.routes[0].cb(null, apiRoute());
+  const previous = p.context.route; p.context.navigator_.reroute([0.001, 0], () => { throw Error('stale callback'); });
+  p.send({ cmd: P.CMD.NAV_STOP }); p.routes[1].cb(null, apiRoute()); assert.equal(p.context.route, previous);
+});
+
+test('out-of-order autocomplete response cannot change the selected visible place', () => {
+  const p = phone(); p.send({ cmd: P.CMD.AUTOCOMPLETE, text: 'co', idx: 10 }); p.send({ cmd: P.CMD.AUTOCOMPLETE, text: 'coffee', idx: 11 });
+  p.autocomplete[1](null, [{ name: 'Coffee', placeId: 'new' }]); p.autocomplete[0](null, [{ name: 'Old', placeId: 'old' }]);
+  p.send({ cmd: P.CMD.SELECT, mode: P.SRC.SUGGEST, idx: 0, num: 11 }); assert.equal(p.details[0].id, 'new');
+  assert.deepEqual(p.messages.filter(m => m.num === P.LIST.SUGGEST).map(m => m.idx), [11]);
+});
+
+test('selection identifies the displayed suggestion snapshot while the next list is in transit', () => {
+  const p = phone(); p.send({ cmd: P.CMD.AUTOCOMPLETE, text: 'co', idx: 10 }); p.autocomplete[0](null, [{ name: 'Old', placeId: 'old' }]);
+  p.send({ cmd: P.CMD.AUTOCOMPLETE, text: 'coffee', idx: 11 }); p.autocomplete[1](null, [{ name: 'Coffee', placeId: 'new' }]);
+  p.send({ cmd: P.CMD.SELECT, mode: P.SRC.SUGGEST, idx: 0, num: 10 }); assert.equal(p.details[0].id, 'old');
+});
+
+test('a recent cached fix preserves its timestamp, rather than becoming new', () => {
+  const p = phone(); p.dev.simLocation = null; const time = Date.now() - 10000; let location;
+  p.context.getLocation(15000, (err, loc) => { assert.equal(err, null); location = loc; });
+  p.fixes[0].ok({ timestamp: time, coords: { latitude: 1, longitude: 2, accuracy: 10 } });
+  assert.equal(p.context.meTime, time); assert.equal(location[0], 1);
+});
+
+test('a ten-minute-old fix and stale fallback cannot start route planning', () => {
+  const p = phone(); p.dev.simLocation = null; p.context.me = [1, 2]; p.context.meTime = Date.now() - 600000;
+  let error; p.context.getLocation(15000, err => { error = err; });
+  p.fixes[0].ok({ timestamp: Date.now() - 600000, coords: { latitude: 1, longitude: 2, accuracy: 10 } });
+  assert.equal(error, undefined); p.clock.run(50000); assert.equal(error.code, P.ERR.NO_LOCATION);
+});
+
+test('completed location requests ignore late fixes from another retry', () => {
+  const p = phone(); p.dev.simLocation = null;
+  p.context.getLocation(15000, () => {}); p.clock.run(4000);
+  p.fixes[1].ok({ timestamp: Date.now(), coords: { latitude: 1, longitude: 2, accuracy: 10 } });
+  p.fixes[0].ok({ timestamp: Date.now(), coords: { latitude: 3, longitude: 4, accuracy: 10 } });
+  assert.equal(p.context.me[0], 1);
+});
+
+test('poor or stale GPS cannot advance navigation, reroute or declare arrival', () => {
+  let arrived = false, reroutes = 0; const messages = [];
+  const navigator = new nav.Navigator({ route: nav.buildRoute(apiRoute(), 0, { lat: 0, lng: 0.01 }), settings: {},
+    send: d => messages.push(d), reroute: () => reroutes++, onArrive: () => { arrived = true; } });
+  navigator.update([0, 0.0099], 500); navigator.update([0, 0.0099], 5, Date.now() - 60000);
+  for (let i = 0; i < 5; i++) navigator.update([1, 1], 500);
+  assert.equal(arrived, false); assert.equal(navigator.lastIdx, 0); assert.equal(reroutes, 0);
+  assert.ok(messages.every(m => m.flags === P.NAV_FLAG.NO_GPS));
+  navigator.update([0, 0.0099], 5, Date.now()); assert.equal(arrived, true);
+});
+
+test('economical mode skips automatic POIs and four travel-mode requests', () => {
+  const p = phone(); p.S.economical = true; assert.equal(p.context.placesShown(), 0);
+  p.send({ cmd: P.CMD.MODE_TIMES }); assert.equal(p.routes.length, 0);
+  assert.ok(p.messages.some(m => m.cmd === P.CMD.LIST && m.num === P.LIST.MODES));
+});
+
+test('the 21st favorite fails explicitly and existing favorites remain intact', () => {
+  const store = { 'clay-settings': JSON.stringify({ favorites: JSON.stringify(Array.from({ length: 20 }, (_, i) => ({ name: 'Place ' + i, placeId: 'p' + i }))) }) };
+  const c = { module: { exports: {} }, require: () => P, localStorage: { getItem: k => store[k], setItem: (k, v) => { store[k] = v; } } };
+  vm.runInNewContext(fs.readFileSync(root + '/settings.js', 'utf8'), c); const settings = c.module.exports;
+  assert.equal(settings.addFavorite({ name: 'extra', placeId: 'extra' }), false); assert.equal(settings.favorites().length, 20);
+  settings.removeFavorite(0); assert.equal(settings.addFavorite({ name: 'extra', placeId: 'extra' }), true);
+  assert.equal(settings.favorites().at(-1).placeId, 'extra');
+});

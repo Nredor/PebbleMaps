@@ -252,11 +252,19 @@ Navigator.prototype.snappedPoint = function (snap) {
   return [a[0] + (b[0] - a[0]) * snap.t, a[1] + (b[1] - a[1]) * snap.t];
 };
 
-Navigator.prototype.update = function (pos, accuracy) {
+Navigator.prototype.update = function (pos, accuracy, timestamp) {
   if (this.arrived) return;
   var now = Date.now();
-  this.lastFix = now;
   var r = this.route;
+  var fixTime = timestamp === undefined ? now : timestamp;
+  var maxAccuracy = r.mode === P.MODE.DRIVE ? 100 : 60;
+  if (!isFinite(accuracy) || accuracy <= 0 || accuracy > maxAccuracy ||
+      now - fixTime > 20000 || fixTime > now + 5000 || fixTime < this.lastFix) {
+    this.offCount = 0;
+    this.noGps('GPS signal weak…');
+    return;
+  }
+  this.lastFix = fixTime;
   var th = THRESH[r.mode] || THRESH[0];
   var snap = this.snap(pos);
   var k = this.stepAt(snap.s);
@@ -287,7 +295,9 @@ Navigator.prototype.update = function (pos, accuracy) {
   // --- arrived?
   var toEnd = r.total - snap.s;
   var destDist = r.dest ? geo.haversine(pos, [r.dest.lat, r.dest.lng]) : toEnd;
-  if ((toEnd < (r.mode === P.MODE.DRIVE ? 35 : 18) && snap.off < 60) || destDist < (r.mode === P.MODE.DRIVE ? 30 : 15)) {
+  var arrivalRadius = r.mode === P.MODE.DRIVE ? 30 : 15;
+  if (accuracy <= arrivalRadius &&
+      ((toEnd < (r.mode === P.MODE.DRIVE ? 35 : 18) && snap.off < 60) || destDist < arrivalRadius)) {
     this.arrived = true;
     this.send({
       cmd: P.CMD.NAV, text: (r.dest && r.dest.name) || 'Destination', text2: '', text3: '', text4: '',
@@ -409,9 +419,9 @@ Navigator.prototype.currentPhrase = function () {
   return 'In ' + brief.spokenDistance(fmt.distance(d, this.settings.imperial, true)) + ', ' + lowerFirst(this.lastSay);
 };
 
-Navigator.prototype.noGps = function () {
+Navigator.prototype.noGps = function (text) {
   this.send({
-    cmd: P.CMD.NAV, text: 'Waiting for GPS…', text2: '', text3: '', text4: '',
+    cmd: P.CMD.NAV, text: text || 'Waiting for GPS…', text2: '', text3: '', text4: '',
     num: P.MAN.DEPART, idx: P.MAN.NONE, num2: 0, flags: P.NAV_FLAG.NO_GPS
   });
 };

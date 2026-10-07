@@ -50,6 +50,7 @@ enum {
   CMD_TOAST = 110,
   CMD_VOICE = 111,
   CMD_INFO_DATA = 112,
+  CMD_VOICE_DONE = 30,
 };
 
 // Pebble Time and Time Round: 64 KB for code and a full-color map picture, so a few

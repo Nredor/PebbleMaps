@@ -78,6 +78,13 @@ function config() {
         { type: 'heading', defaultValue: 'Map', size: 4 },
         {
           type: 'toggle',
+          messageKey: 'economical',
+          label: 'Economical mode',
+          description: 'Reduce Google requests: skip map prefetching, automatic places on the map, and estimates for all travel modes. Searches and directions still work. This does not cap your bill.',
+          defaultValue: false
+        },
+        {
+          type: 'toggle',
           messageKey: 'liveLocation',
           label: 'Live location',
           description: 'Your blue dot moves with you on the map (it turns into an arrow while you\'re moving). ' +

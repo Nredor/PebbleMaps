@@ -223,6 +223,7 @@ static void canvas_update(Layer *layer, GContext *ctx) {
 #if KEYBOARD_AVAILABLE
 // --- Typing a search (touch keyboard with suggestions from Google) ---------------
 static int s_ac_id;
+static int s_ac_shown_id;
 static bool s_ac_new_session;
 
 static void kb_background(GContext *ctx, GRect b, void *c) { map_draw(ctx, map_frame(b), -1); }
@@ -233,6 +234,7 @@ static void kb_handler(int cmd, DictionaryIterator *it, void *ctx) {
   int n = 0;
   ListItem *items = alloc_list(tuple_str(it, MESSAGE_KEY_list), 5, &n);
   keyboard_set_suggestions(items, n);
+  s_ac_shown_id = s_ac_id;
 }
 
 static void kb_appear(void *c) { comm_set_handler(kb_handler, NULL); }
@@ -248,7 +250,7 @@ static void kb_changed(const char *text, void *c) {
   comm_send(&m);
 }
 
-static void kb_pick(int i, const char *title, void *c) { place_window_push(SRC_SUGGEST, i, title); }
+static void kb_pick(int i, const char *title, void *c) { place_window_push_suggestion(i, title, s_ac_shown_id); }
 static void kb_done(const char *text, void *c) { results_window_push_search(text); }
 
 static void open_keyboard(void) {

@@ -48,6 +48,7 @@ function get() {
     avoidFerries: bool(c.avoidFerries, false),
     vibrate: bool(c.vibrate, true),
     allModeTimes: bool(c.allModeTimes, true),
+    economical: bool(c.economical, false),
     mapStyle: c.mapStyle || 'light',
     liveLocation: bool(c.liveLocation, true),
     disableTouch: bool(c.disableTouch, false),
@@ -100,6 +101,7 @@ function findFavorite(place) {
 function addFavorite(place) {
   var list = favorites();
   if (findFavorite(place) >= 0) return false;
+  if (list.length >= MAX_FAVS) return false;
   list.push({
     name: place.name, address: place.address || place.fullAddress || '',
     lat: place.lat, lng: place.lng, placeId: place.placeId || '', mode: 'default'

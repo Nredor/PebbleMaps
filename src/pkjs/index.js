@@ -38,6 +38,7 @@ var route = null;         // built route (nav model)
 var routeKey = '';
 var routeTime = 0;
 var navigator_ = null;
+var navSession = 0;       // invalidates route/GPS callbacks after stop or restart
 var watchId = null;
 var simTimer = null;
 var gpsTimer = null;
@@ -122,15 +123,32 @@ var LOCATION_ERROR = {
 // with longer to try, before giving up. Everyone asking meanwhile shares the answer.
 var locWait = null;
 
+function acceptFix(pos) {
+  var c = pos && pos.coords;
+  var t = Number(pos && pos.timestamp);
+  if (!c || !isFinite(c.latitude) || !isFinite(c.longitude) ||
+      Math.abs(c.latitude) > 90 || Math.abs(c.longitude) > 180 ||
+      !isFinite(t) || t <= 0 || t > Date.now() + 5000 || t < meTime) return false;
+  me = [c.latitude, c.longitude];
+  meAcc = typeof c.accuracy === 'number' && isFinite(c.accuracy) && c.accuracy > 0 ? c.accuracy : Infinity;
+  meTime = t;
+  return true;
+}
+
+function recentLocation(age) {
+  return me && Date.now() - meTime <= age && meAcc <= 100;
+}
+
 function getLocation(maxAge, cb) {
   if (dev.simLocation) {
     me = me || dev.simLocation.slice();
     meTime = Date.now();
     return cb(null, me);
   }
-  if (me && Date.now() - meTime < maxAge) return cb(null, me);
-  if (locWait) { locWait.cbs.push(cb); return; }
-  var w = locWait = { cbs: [cb], timers: [] };
+  if (recentLocation(maxAge)) return cb(null, me);
+  if (locWait) { locWait.age = Math.min(locWait.age, Math.max(30000, maxAge)); locWait.cbs.push(cb); return; }
+  var fallbackAge = Math.max(30000, maxAge);
+  var w = locWait = { cbs: [cb], timers: [], age: fallbackAge };
   function finish(err, loc) {
     if (locWait !== w) return;
     locWait = null;
@@ -139,25 +157,24 @@ function getLocation(maxAge, cb) {
   }
   function ask(high, age, timeout) {
     navigator.geolocation.getCurrentPosition(function (pos) {
-      me = [pos.coords.latitude, pos.coords.longitude];
-      meAcc = pos.coords.accuracy || 50;
-      meTime = Date.now();
-      finish(null, me);
+      if (locWait !== w) return;
+      if (acceptFix(pos) && recentLocation(w.age)) finish(null, me);
     }, function (e) {
-      if (me) return finish(null, me);   // fall back to the last known spot
+      if (locWait !== w) return;
       if (e && e.code === 1) finish(LOCATION_ERROR);   // location turned off for the Pebble app
+      else if (recentLocation(w.age)) finish(null, me);
       // otherwise keep waiting for the other tries
     }, { enableHighAccuracy: high, maximumAge: age, timeout: timeout });
   }
   ask(true, Math.min(maxAge, 60000), 15000);
-  w.timers.push(setTimeout(function () { ask(false, 600000, 10000); }, 4000));
-  w.timers.push(setTimeout(function () { ask(true, 600000, 30000); }, 15000));
-  w.timers.push(setTimeout(function () { finish(me ? null : LOCATION_ERROR, me); }, 50000));
+  w.timers.push(setTimeout(function () { ask(false, w.age, 10000); }, 4000));
+  w.timers.push(setTimeout(function () { ask(true, w.age, 30000); }, 15000));
+  w.timers.push(setTimeout(function () { finish(recentLocation(w.age) ? null : LOCATION_ERROR, recentLocation(w.age) ? me : null); }, 50000));
 }
 
 // A fix from live tracking answers anyone still waiting
 function locationArrived() {
-  if (locWait && me) {
+  if (locWait && recentLocation(locWait.age)) {
     var w = locWait;
     locWait = null;
     w.timers.forEach(clearTimeout);
@@ -219,6 +236,7 @@ function meMarker(v) {
 
 // What the home map shows: the watch's choice
 function placesShown() {
+  if (S.economical) return 0;
   return watch.lowmem ? Math.min(poiMode, 1) : poiMode;   // Pebble Time / Time Round: dots only
 }
 
@@ -460,7 +478,7 @@ function streamMap(seq, view, markers, done, quiet) {
       ack: true,
       onBegin: function () { if (done) done(null); }
     });
-    tiles.prefetchAround(o, true);
+    if (!S.economical) tiles.prefetchAround(o, true);
   });
 }
 
@@ -608,8 +626,9 @@ function startLive() {
     return;
   }
   live.watchId = navigator.geolocation.watchPosition(function (pos) {
+    if (!acceptFix(pos) || Date.now() - meTime > 20000) return;
     var c = pos.coords;
-    onLiveFix([c.latitude, c.longitude], c.accuracy || 50, c.heading, c.speed, Date.now());
+    onLiveFix(me, meAcc, c.heading, c.speed, meTime);
   }, function (e) {
     console.log('live location: ' + (e && e.message));
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
@@ -849,6 +868,7 @@ function onSearch(p) {
 // --- Suggestions while typing on the watch keyboard ------------------------
 var suggestions = [];
 var acToken = null, acTokenTime = 0;
+var acRequest = 0, suggestionSets = [], acGeneration = 0;
 
 function newToken() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (ch) {
@@ -862,14 +882,21 @@ function onAutocomplete(p) {
   var text = String(p.text || '').trim();
   var reqId = p.idx || 0;
   if (!text) return;
+  acRequest = reqId;
+  var generation = ++acGeneration;
   if (!acToken || p.mode === 1 || Date.now() - acTokenTime > 170000) {
     acToken = newToken();
     acTokenTime = Date.now();
   }
+  var token = acToken;
   getLocation(120000, function (err, loc) {
-    google.autocomplete(text, err ? null : loc, acToken, function (e2, list) {
+    if (generation !== acGeneration) return;
+    google.autocomplete(text, err ? null : loc, token, function (e2, list) {
+      if (generation !== acGeneration || reqId !== acRequest) return;
       if (e2) { console.log('autocomplete: ' + (e2.text || e2.title)); list = []; }
       suggestions = list.slice(0, 5);
+      suggestionSets.unshift({ id: reqId, list: suggestions, token: token });
+      if (suggestionSets.length > 5) suggestionSets.pop();
       var items = suggestions.map(function (sg) {
         var bits = [];
         if (sg.distance !== undefined) bits.push(fmt.distance(sg.distance, S.imperial));
@@ -919,17 +946,16 @@ function onResultsMap(p) {
 function withDest(cb) {
   if (!dest) return cb({ code: P.ERR.API, text: 'Pick a place first.' });
   if (dest.lat !== undefined && dest.lat !== null && !isNaN(dest.lat)) return cb(null, dest);
-  if (destWaiters) { destWaiters.push(cb); return; }
-  destWaiters = [cb];
   var target = dest;
+  if (destWaiters && destWaiters.target === target) { destWaiters.cbs.push(cb); return; }
+  var pendingDest = destWaiters = { target: target, cbs: [cb] };
   function finish(err) {
-    var w = destWaiters;
-    destWaiters = null;
-    w.forEach(function (fn) { fn(err, err ? null : target); });
+    if (destWaiters === pendingDest) destWaiters = null;
+    pendingDest.cbs.forEach(function (fn) { fn(err, err ? null : target); });
   }
   if (target.fromSuggest && target.placeId) {
     // a place picked from the typing suggestions: ask Google where it is
-    var token = acToken;
+    var token = target.suggestToken;
     acToken = null;
     return google.placeDetails(target.placeId, token, function (e0, pl) {
       if (e0 || !pl || pl.lat === undefined) return finish(e0 || { code: P.ERR.NO_RESULTS, text: 'Couldn\'t find that place.' });
@@ -973,7 +999,9 @@ function destMode(d) {
 }
 
 function sendPlace() {
+  var selected = dest;
   withDest(function (err, d) {
+    if (dest !== selected) return;
     if (err) return sendError(err);
     var distText = me ? fmt.distance(geo.haversine(me, [d.lat, d.lng]), S.imperial) + ' away' : '';
     send({
@@ -1002,9 +1030,11 @@ function onSelect(p) {
     }
   } else if (src === P.SRC.RECENTS) d = settings.recents()[idx];
   else if (src === P.SRC.POI && pois[idx]) d = JSON.parse(JSON.stringify(pois[idx]));
-  else if (src === P.SRC.SUGGEST && suggestions[idx]) {
-    var sg = suggestions[idx];
-    d = { name: sg.name, address: sg.address, placeId: sg.placeId, fromSuggest: true };
+  else if (src === P.SRC.SUGGEST) {
+    var set = suggestionSets.filter(function (s) { return s.id === p.num; })[0];
+    if (!set && p.num === undefined) set = suggestionSets[0];   // older watch builds
+    var sg = set && set.list[idx];
+    if (sg) d = { name: sg.name, address: sg.address, placeId: sg.placeId, fromSuggest: true, suggestToken: set.token };
   }
   if (!d) return sendError({ code: P.ERR.API, text: 'That place is no longer available.' });
   dest = d;
@@ -1035,7 +1065,7 @@ function onModeTimes() {
   withDest(function (err, d) {
     if (err) return sendError(err);
     var items = P.MODE_NAMES.map(function (n) { return { title: n, sub: '' }; });
-    if (!S.allModeTimes) return sendList(P.LIST.MODES, items);
+    if (!S.allModeTimes || S.economical) return sendList(P.LIST.MODES, items);
     getLocation(60000, function (e1, loc) {
       if (e1) return sendList(P.LIST.MODES, items);
       var pending = 4;
@@ -1054,6 +1084,7 @@ function getRoute(mode, force, cb) {
   withDest(function (err, d) {
     if (err) return cb(err);
     getLocation(15000, function (e1, loc) {
+      if (dest !== d) return cb({ stale: true });
       if (e1) return cb(e1);
       var key = [d.lat.toFixed(5), d.lng.toFixed(5), mode].join(',');
       if (!force && route && routeKey === key && Date.now() - routeTime < 180000 &&
@@ -1061,6 +1092,7 @@ function getRoute(mode, force, cb) {
         return cb(null, route);
       }
       google.computeRoute(loc, d, mode, prefs(), true, function (e2, r) {
+        if (dest !== d) return cb({ stale: true });
         if (e2) return cb(e2);
         route = nav.buildRoute(r, mode, d);
         routeKey = key;
@@ -1086,6 +1118,7 @@ function onRoute(p) {
   var size = clampSize(p.width, p.height);
   sendBusy('Getting directions');
   getRoute(mode, false, function (err, rt) {
+    if (err && err.stale) return;
     if (err) return sendError(err);
     settings.addRecent(rt.dest);
     var traffic = 0;
@@ -1323,6 +1356,9 @@ function onNavView(p) {
 }
 
 function stopNav() {
+  navSession++;
+  voice.cancel();
+  clearTimeout(voiceTimer);
   if (watchId !== null) {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
@@ -1361,8 +1397,10 @@ function onNavStart(p) {
   navState = { seq: p.seq, w: clampSize(p.width, p.height)[0], h: clampSize(p.width, p.height)[1],
     zoomDelta: 0, pan: null, panHeading: 0, overview: false, shown: null, streaming: false, pending: false,
     headingUp: p.num !== 0, voice: voiceOn };
+  var session = navSession, state = navState;
   getRoute(mode, false, function (err, rt) {
-    if (err) return sendError(err);
+    if (session !== navSession || navState !== state) return;
+    if (err) { stopNav(); if (!err.stale) sendError(err); return; }
     navigator_ = new nav.Navigator({
       route: rt,
       view: { w: p.width > 0 ? p.width : watch.w, h: p.height > 0 ? p.height : watch.h - 100 },
@@ -1372,24 +1410,23 @@ function onNavStart(p) {
       prepare: function (texts) { if (navState && navState.voice) voice.prepare(texts); },
       reroute: function (pos, cb) {
         google.computeRoute(pos, rt.dest, mode, prefs(), true, function (e2, r) {
+          if (session !== navSession || navState !== state) return;
           if (e2) return cb(e2);
           route = nav.buildRoute(r, mode, rt.dest);
           routeTime = Date.now();
           cb(null, route);
-          setTimeout(function () { if (navState) { navState.streaming = false; navRender(true); } }, 0);  // redraw the new route line
+          setTimeout(function () { if (session === navSession && navState === state) { state.streaming = false; navRender(true); } }, 0);
         });
       },
       onArrive: function () {
-        setTimeout(stopNav, 1000);
+        setTimeout(function () { if (session === navSession) stopNav(); }, 1000);
       }
     });
-    if (me) navigator_.update(me, meAcc);
+    if (me) navigator_.update(me, meAcc, meTime);
     if (dev.simLocation) return startSimulation();
     watchId = navigator.geolocation.watchPosition(function (pos) {
-      me = [pos.coords.latitude, pos.coords.longitude];
-      meAcc = pos.coords.accuracy || 30;
-      meTime = Date.now();
-      if (navigator_) navigator_.update(me, meAcc);
+      if (session !== navSession || navState !== state || !acceptFix(pos)) return;
+      if (navigator_) navigator_.update(me, meAcc, meTime);
     }, function (e) {
       console.log('watchPosition error ' + (e && e.message));
     }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
@@ -1640,7 +1677,7 @@ function onFavToggle() {
       if (d.favIndex !== undefined) delete d.favIndex;
       toast('Removed from favorites');
     } else {
-      settings.addFavorite(d);
+      if (!settings.addFavorite(d)) return toast('Favorites full (20). Remove one first.');
       d.favIndex = settings.findFavorite(d);
       toast('Saved to favorites');
     }
@@ -1654,7 +1691,7 @@ function onSaveHere() {
       var addr = (!e2 && g && g.address) || (loc[0].toFixed(5) + ', ' + loc[1].toFixed(5));
       var name = addr.split(',')[0];
       var place = { name: name, address: addr, lat: loc[0], lng: loc[1], placeId: (g && g.placeId) || '' };
-      if (!settings.addFavorite(place)) return toast('Already saved');
+      if (!settings.addFavorite(place)) return toast(settings.findFavorite(place) >= 0 ? 'Already saved' : 'Favorites full (20). Remove one first.');
       toast('Saved ' + fmt.clip(name, 30));
     });
   });
@@ -1729,6 +1766,7 @@ function onMessage(e) {
       case CMD.STEPS: onSteps(); break;
       case CMD.NAV_START: wimg = null; mapVisible = false; onNavStart(p); updateTracking(); break;
       case CMD.NAV_STOP: stopNav(); mapVisible = false; updateTracking(); break;
+      case CMD.VOICE_DONE: voice.completed(p.idx, p.mode === 1); break;
       case CMD.FAV_LIST: onFavList(); break;
       case CMD.FAV_TOGGLE: onFavToggle(); break;
       case CMD.FAV_DELETE:

@@ -2,7 +2,7 @@
 
 Google Maps on your Pebble: voice search, nearby places, favorites, and turn-by-turn
 directions for driving, walking, biking and transit. It uses **your own Google Maps
-API key**, so it stays free (Google's monthly free allowance covers normal personal use).
+API key**. Google offers free monthly allowances; usage beyond those allowances can incur charges.
 
 Works on Pebble Time / Time Steel, Time Round, Pebble 2, Pebble 2 Duo, Pebble Time 2
 and Pebble Round 2.
@@ -39,7 +39,11 @@ Routes API (directions), Geocoding API (addresses), Cloud Text-to-Speech (spoken
 
 ## Development
 
-`pebble build` builds the PBW. `tools/mock_google.py` is a fake Google server for testing
+`npm test` runs the phone regression tests and native C queue/speaker tests (Node 22+, Python 3 and GCC).
+CI uses Pebble SDK 4.33.1 with pebble-tool 5.0.40. `pebble build` builds the PBW. `tools/mock_google.py` is a fake Google server for testing
 in the emulator without a key (see `src/pkjs/dev.js`).
+
+Economical mode in Settings disables map prefetching, automatic map places and
+travel-time requests for all modes. It reduces requests; it is not a billing cap.
 
 Pebble Maps is not made by or affiliated with Google.

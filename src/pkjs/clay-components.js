@@ -191,7 +191,7 @@ module.exports = [
           } else {
             status.className = 'pm-status todo';
             status.innerHTML = '<span class="ic">🔑</span><span><b>Let\'s get you set up</b>' +
-              'Pebble Maps uses your own free Google Maps key. Follow the steps below — about 10 minutes, one time only.</span>';
+              'Pebble Maps uses your own Google Maps key. Follow the steps below — about 10 minutes, one time only.</span>';
           }
         }
         if (item) {
@@ -238,13 +238,13 @@ module.exports = [
       '<div class="pm-guide">',
       '<div class="pm-mini"><button type="button" class="pm-show">Show setup instructions</button></div>',
       '<div class="pm-full">',
-      '<h4 class="pm-gh">Get your free Google Maps key</h4>',
+      '<h4 class="pm-gh">Get your Google Maps key</h4>',
       '<p class="intro">Google charges apps for map data, so instead of a subscription, Pebble Maps lets you use ',
-      '<b>your own Google key</b>. Google gives every key a big free monthly allowance — far more than one person uses.</p>',
+      '<b>your own Google key</b>. Google offers monthly free allowances. Usage beyond those allowances can incur charges.</p>',
 
       '<div class="pm-need"><b>You will need:</b><br>',
       '• A Google account (your Gmail login works)<br>',
-      '• A credit or debit card — Google uses it to confirm you\'re a real person<br>',
+      '• A credit or debit card — Google requires a billing account<br>',
       '<b>Tip:</b> it\'s easiest on a computer. When you get your key in step 5, email it to yourself, then open this page on your phone and paste it.</div>',
 
       // Step 1
@@ -268,7 +268,7 @@ module.exports = [
       '</div></details>',
 
       // Step 3
-      '<details class="pm-step" data-step="3"><summary><span class="n">3</span><span class="t">Turn on billing (stays free)</span><span class="chev">›</span></summary>',
+      '<details class="pm-step" data-step="3"><summary><span class="n">3</span><span class="t">Turn on billing</span><span class="chev">›</span></summary>',
       '<div class="body"><p>Google requires a card on file before it will hand out map data, even for the free allowance.</p><ol>',
       '<li>Open the billing page for your project:</li></ol>',
       '<div class="pm-link" data-url="https://console.cloud.google.com/billing/linkedaccount"></div>',
@@ -314,7 +314,8 @@ module.exports = [
       '<div class="pm-link" data-url="https://console.cloud.google.com/billing/budgets"></div>',
       '<ol><li>Tap <span class="pm-chip">Create budget</span>.</li>',
       '<li>Name it <span class="pm-chip">Pebble Maps</span> and tap <span class="pm-chip">Next</span>.</li>',
-      '<li>Set the amount to <span class="pm-chip">1</span>, keep the suggested alerts, and tap <span class="pm-chip">Finish</span>.</li></ol>',
+      '<li>Set the amount to <span class="pm-chip">1</span>, keep the suggested alerts, and tap <span class="pm-chip">Finish</span>.</li></ol>' +
+      '<p><b>An email alert is not a spending cap.</b> To limit requests, open APIs &amp; Services → each enabled API → Quotas and set lower request limits where supported. Limits can stop maps or directions from loading and do not guarantee a zero bill. Economical mode reduces background requests.</p>',
       '</div></details>',
 
       // Step 7
@@ -322,8 +323,8 @@ module.exports = [
       '<div class="body">Tap the <b>Google Maps key</b> box (with these steps), paste your key, then tap <b>Save settings</b> at the bottom. ',
       'A map preview appears when the key works, and your watch will say <b>"Your Google key works!"</b></div></details>',
 
-      '<div class="pm-free"><b>What\'s free?</b> Every month Google includes about 10,000 map pictures, 5,000 place searches and 5,000–10,000 route lookups at no charge. ',
-      'A typical trip in Pebble Maps uses around 10, so normal use costs nothing.</div>',
+      '<div class="pm-free"><b>What\'s free?</b> Google offers free monthly allowances for eligible services. ',
+      'Usage depends on your trips, searches and the services requested. Check Google\'s current pricing; free allowances vary by service.</div>',
       '<div class="pm-hide-row"><button type="button" class="pm-hide">Hide instructions</button></div>',
       '</div></div>'
     ].join(''),

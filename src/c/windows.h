@@ -27,6 +27,7 @@ void list_window_push(ListKind kind, int arg);
 
 // Place card
 void place_window_push(int src, int idx, const char *title);
+void place_window_push_suggestion(int idx, const char *title, int request_id);
 int place_default_mode(void);
 
 // Place info: photos, rating, hours, reviews (src = SRC_*, title may be NULL)

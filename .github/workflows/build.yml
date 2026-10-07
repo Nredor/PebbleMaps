@@ -10,8 +10,13 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Install Pebble SDK
         run: |
-          uv tool install pebble-tool --python 3.13
-          yes | pebble sdk install latest
+          uv tool install pebble-tool==5.0.40 --python 3.13
+          yes | pebble sdk install 4.33.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Regression tests
+        run: npm test
       - name: Build
         run: pebble build
       - uses: actions/upload-artifact@v4

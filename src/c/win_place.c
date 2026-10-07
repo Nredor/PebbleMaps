@@ -11,6 +11,7 @@ static Window *s_window;
 static Layer *s_canvas;
 static Layer *s_dots;
 static int s_src, s_idx;
+static int s_suggest_request;
 static char s_name[64];
 static char s_type[48];
 static char s_addr[96];
@@ -176,7 +177,12 @@ static void window_load(Window *window) {
   dots_layer_set_running(s_dots, true);
   mapbar_init(&s_bar, s_canvas, GSize(b.size.w - STRIP_W, map_h(b)), ICON_NONE, ICON_NONE, bar_cb, NULL);
   maptouch_init(&s_touch, GRect(0, 0, b.size.w - STRIP_W, map_h(b)), map_tap, NULL, &s_bar);
-  comm_cmd2(CMD_SELECT, s_idx, s_src);
+  OutMsg m;
+  comm_msg_init(&m, CMD_SELECT);
+  m.idx = s_idx;
+  m.mode = s_src;
+  if (s_src == SRC_SUGGEST) m.num = s_suggest_request;
+  comm_send(&m);
 }
 
 static void window_appear(Window *window) {
@@ -207,10 +213,11 @@ void place_window_close(void) {
   if (s_window) window_stack_remove(s_window, false);
 }
 
-void place_window_push(int src, int idx, const char *title) {
+static void place_push(int src, int idx, const char *title, int request_id) {
   if (s_window) window_stack_remove(s_window, false);
   s_src = src;
   s_idx = idx;
+  s_suggest_request = request_id;
   s_loaded = false;
   s_fav = false;
   strncpy(s_name, title ? title : "", sizeof(s_name) - 1);
@@ -229,3 +236,6 @@ void place_window_push(int src, int idx, const char *title) {
   });
   window_stack_push(s_window, true);
 }
+
+void place_window_push(int src, int idx, const char *title) { place_push(src, idx, title, 0); }
+void place_window_push_suggestion(int idx, const char *title, int request_id) { place_push(SRC_SUGGEST, idx, title, request_id); }

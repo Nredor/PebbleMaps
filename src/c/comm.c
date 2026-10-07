@@ -89,8 +89,12 @@ static void pump(void) {
 void comm_send(const OutMsg *m) {
   if (!s_queue) return;
   if (s_q_count == QUEUE_LEN) {
-    // drop the oldest pending message
-    s_q_head = (s_q_head + 1) % QUEUE_LEN;
+    // The head belongs to the outstanding outbox callback. Preserve it,
+    // dropping the oldest UNSENT entry instead.
+    int first = s_sending ? 1 : 0;
+    for (int i = first; i < s_q_count - 1; i++) {
+      s_queue[(s_q_head + i) % QUEUE_LEN] = s_queue[(s_q_head + i + 1) % QUEUE_LEN];
+    }
     s_q_count--;
   }
   s_queue[(s_q_head + s_q_count) % QUEUE_LEN] = *m;

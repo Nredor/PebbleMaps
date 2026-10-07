@@ -28,6 +28,7 @@ static int s_rx_id, s_rx_total, s_rx_got, s_rx_samples, s_rx_pred, s_rx_index;
 
 // clip being played
 static uint8_t *s_play;
+static int s_play_id;
 static int s_samples, s_pos;       // total samples, next sample to decode
 static int32_t s_pred;
 static int s_index;
@@ -37,6 +38,17 @@ static AppTimer *s_timer;
 static bool s_open;
 static int s_volume = -1;
 static bool s_enabled;
+
+static void acknowledge(bool played) {
+  if (s_play_id) {
+    comm_cmd2(CMD_VOICE_DONE, s_play_id, played ? 1 : 0);
+    s_play_id = 0;
+  }
+}
+
+static void playback_finished(SpeakerFinishReason reason, void *ctx) {
+  acknowledge(reason == SpeakerFinishReasonDone);
+}
 
 void voice_set_enabled(bool on) {
   s_enabled = on;
@@ -58,9 +70,13 @@ static void finish_play(void) {
 }
 
 void voice_stop(void) {
-  if (s_open) speaker_stop();
+  free(s_rx);
+  s_rx = NULL;
+  speaker_set_finish_callback(NULL, NULL);
+  if (s_open || s_play_id) speaker_stop();
   s_open = false;
   finish_play();
+  acknowledge(false);
 }
 
 static void decode_block(void) {
@@ -95,6 +111,7 @@ static void pump(void *data) {
     if (s_buf_off >= s_buf_n) {
       if (s_pos >= s_samples) { finish_play(); return; }
       decode_block();
+      if (!s_buf) { voice_stop(); return; }
     }
     uint32_t want = (uint32_t)(s_buf_n - s_buf_off) * 2;
     uint32_t wrote = speaker_stream_write(&s_buf[s_buf_off], want);
@@ -104,17 +121,19 @@ static void pump(void *data) {
   s_timer = app_timer_register(PUMP_MS, pump, NULL);
 }
 
-static void play(uint8_t *clip, int samples, int pred, int index) {
+static void play(uint8_t *clip, int samples, int pred, int index, int id) {
   voice_stop();
-  if (speaker_is_muted()) { free(clip); return; }
+  if (speaker_is_muted()) { free(clip); comm_cmd2(CMD_VOICE_DONE, id, 0); return; }
   s_play = clip;
+  s_play_id = id;
   s_samples = samples;
   s_pos = 0;
   s_pred = pred;
   s_index = index < 0 ? 0 : (index > 88 ? 88 : index);
   s_buf_n = s_buf_off = 0;
+  speaker_set_finish_callback(playback_finished, NULL);
   s_open = speaker_stream_open(SpeakerPcmFormat_8kHz_16bit, voice_volume());
-  if (!s_open) { finish_play(); return; }
+  if (!s_open) { finish_play(); acknowledge(false); return; }
   pump(NULL);
 }
 
@@ -122,6 +141,7 @@ void voice_handle(DictionaryIterator *it) {
   if (!s_enabled) return;
   int id = tuple_int(it, MESSAGE_KEY_idx, 0);
   int off = tuple_int(it, MESSAGE_KEY_offset, 0);
+  if (off < 0) return;
   const Tuple *dt = dict_find(it, MESSAGE_KEY_data);
   if (off == 0) {
     free(s_rx);
@@ -136,7 +156,7 @@ void voice_handle(DictionaryIterator *it) {
     s_rx = malloc(s_rx_total);
     if (!s_rx) { APP_LOG(APP_LOG_LEVEL_WARNING, "voice: no memory for %d", s_rx_total); return; }
   }
-  if (!s_rx || id != s_rx_id || !dt) return;
+  if (!s_rx || id != s_rx_id || !dt || off != s_rx_got || off >= s_rx_total) return;
   int len = dt->length;
   if (off + len > s_rx_total) len = s_rx_total - off;
   if (len > 0) memcpy(s_rx + off, dt->value->data, len);
@@ -146,7 +166,7 @@ void voice_handle(DictionaryIterator *it) {
     s_rx = NULL;
     int samples = s_rx_samples;
     if (samples > s_rx_total * 2) samples = s_rx_total * 2;
-    play(clip, samples, s_rx_pred, s_rx_index);
+    play(clip, samples, s_rx_pred, s_rx_index, id);
   }
 }
 
