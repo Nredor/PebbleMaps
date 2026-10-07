@@ -123,20 +123,26 @@ var LOCATION_ERROR = {
 // with longer to try, before giving up. Everyone asking meanwhile shares the answer.
 var locWait = null;
 
+var FALLBACK_AGE = 600000;   // a position this old (10 min) still beats no map at all
+
+// Take a position from the phone. Its own timestamp is kept when it looks right; phones that
+// send none (or one in seconds, or from a wrong clock) get "now" instead of being rejected.
 function acceptFix(pos) {
   var c = pos && pos.coords;
-  var t = Number(pos && pos.timestamp);
   if (!c || !isFinite(c.latitude) || !isFinite(c.longitude) ||
-      Math.abs(c.latitude) > 90 || Math.abs(c.longitude) > 180 ||
-      !isFinite(t) || t <= 0 || t > Date.now() + 5000 || t < meTime) return false;
+      Math.abs(c.latitude) > 90 || Math.abs(c.longitude) > 180 || (c.latitude === 0 && c.longitude === 0)) return false;
+  var now = Date.now();
+  var ts = pos.timestamp instanceof Date ? pos.timestamp.getTime() : Number(pos.timestamp);
+  var t = (isFinite(ts) && ts <= now + 5000 && ts >= now - 3600000) ? Math.min(ts, now) : now;
+  if (me && t < meTime) return false;   // older than what we already have
   me = [c.latitude, c.longitude];
-  meAcc = typeof c.accuracy === 'number' && isFinite(c.accuracy) && c.accuracy > 0 ? c.accuracy : Infinity;
+  meAcc = (typeof c.accuracy === 'number' && isFinite(c.accuracy) && c.accuracy > 0) ? c.accuracy : 50;
   meTime = t;
   return true;
 }
 
 function recentLocation(age) {
-  return me && Date.now() - meTime <= age && meAcc <= 100;
+  return !!me && Date.now() - meTime <= age;
 }
 
 function getLocation(maxAge, cb) {
@@ -146,9 +152,8 @@ function getLocation(maxAge, cb) {
     return cb(null, me);
   }
   if (recentLocation(maxAge)) return cb(null, me);
-  if (locWait) { locWait.age = Math.min(locWait.age, Math.max(30000, maxAge)); locWait.cbs.push(cb); return; }
-  var fallbackAge = Math.max(30000, maxAge);
-  var w = locWait = { cbs: [cb], timers: [], age: fallbackAge };
+  if (locWait) { locWait.cbs.push(cb); return; }
+  var w = locWait = { cbs: [cb], timers: [] };
   function finish(err, loc) {
     if (locWait !== w) return;
     locWait = null;
@@ -158,23 +163,26 @@ function getLocation(maxAge, cb) {
   function ask(high, age, timeout) {
     navigator.geolocation.getCurrentPosition(function (pos) {
       if (locWait !== w) return;
-      if (acceptFix(pos) && recentLocation(w.age)) finish(null, me);
+      acceptFix(pos);
+      if (recentLocation(age + 5000)) finish(null, me);
     }, function (e) {
       if (locWait !== w) return;
-      if (e && e.code === 1) finish(LOCATION_ERROR);   // location turned off for the Pebble app
-      else if (recentLocation(w.age)) finish(null, me);
+      if (e && e.code === 1) return finish(LOCATION_ERROR);   // location turned off for the Pebble app
+      if (recentLocation(FALLBACK_AGE)) finish(null, me);     // the last spot, if it's fairly recent
       // otherwise keep waiting for the other tries
     }, { enableHighAccuracy: high, maximumAge: age, timeout: timeout });
   }
   ask(true, Math.min(maxAge, 60000), 15000);
-  w.timers.push(setTimeout(function () { ask(false, w.age, 10000); }, 4000));
-  w.timers.push(setTimeout(function () { ask(true, w.age, 30000); }, 15000));
-  w.timers.push(setTimeout(function () { finish(recentLocation(w.age) ? null : LOCATION_ERROR, recentLocation(w.age) ? me : null); }, 50000));
+  w.timers.push(setTimeout(function () { ask(false, 300000, 10000); }, 4000));
+  w.timers.push(setTimeout(function () { ask(true, 300000, 30000); }, 15000));
+  w.timers.push(setTimeout(function () {
+    finish(recentLocation(FALLBACK_AGE) ? null : LOCATION_ERROR, recentLocation(FALLBACK_AGE) ? me : null);
+  }, 50000));
 }
 
 // A fix from live tracking answers anyone still waiting
 function locationArrived() {
-  if (locWait && recentLocation(locWait.age)) {
+  if (locWait && recentLocation(20000)) {
     var w = locWait;
     locWait = null;
     w.timers.forEach(clearTimeout);

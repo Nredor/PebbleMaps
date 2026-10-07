@@ -113,10 +113,10 @@ test('a recent cached fix preserves its timestamp, rather than becoming new', ()
   assert.equal(p.context.meTime, time); assert.equal(location[0], 1);
 });
 
-test('a ten-minute-old fix and stale fallback cannot start route planning', () => {
-  const p = phone(); p.dev.simLocation = null; p.context.me = [1, 2]; p.context.meTime = Date.now() - 600000;
+test('a fifteen-minute-old fix and stale fallback cannot start route planning', () => {
+  const p = phone(); p.dev.simLocation = null; p.context.me = [1, 2]; p.context.meTime = Date.now() - 900000;
   let error; p.context.getLocation(15000, err => { error = err; });
-  p.fixes[0].ok({ timestamp: Date.now() - 600000, coords: { latitude: 1, longitude: 2, accuracy: 10 } });
+  p.fixes[0].ok({ timestamp: Date.now() - 900000, coords: { latitude: 1, longitude: 2, accuracy: 10 } });
   assert.equal(error, undefined); p.clock.run(50000); assert.equal(error.code, P.ERR.NO_LOCATION);
 });
 
@@ -152,4 +152,15 @@ test('the 21st favorite fails explicitly and existing favorites remain intact', 
   assert.equal(settings.addFavorite({ name: 'extra', placeId: 'extra' }), false); assert.equal(settings.favorites().length, 20);
   settings.removeFavorite(0); assert.equal(settings.addFavorite({ name: 'extra', placeId: 'extra' }), true);
   assert.equal(settings.favorites().at(-1).placeId, 'extra');
+});
+
+test('a fix without a usable timestamp or with poor accuracy still shows where you are', () => {
+  const p = phone(); p.dev.simLocation = null;
+  let loc; p.context.getLocation(20000, (err, l) => { loc = l; });
+  p.fixes[0].ok({ coords: { latitude: 47.6, longitude: -122.3, accuracy: 1500 } });
+  assert.deepEqual(Array.from(loc), [47.6, -122.3]);
+  const q = phone(); q.dev.simLocation = null;
+  let loc2; q.context.getLocation(20000, (err, l) => { loc2 = l; });
+  q.fixes[0].ok({ timestamp: Math.floor(Date.now() / 1000), coords: { latitude: 1, longitude: 2, accuracy: 20 } });
+  assert.deepEqual(Array.from(loc2), [1, 2]);
 });

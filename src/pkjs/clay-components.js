@@ -240,7 +240,7 @@ module.exports = [
       '<div class="pm-full">',
       '<h4 class="pm-gh">Get your Google Maps key</h4>',
       '<p class="intro">Google charges apps for map data, so instead of a subscription, Pebble Maps lets you use ',
-      '<b>your own Google key</b>. Google offers monthly free allowances. Usage beyond those allowances can incur charges.</p>',
+      '<b>your own Google key</b>. Google gives every key a free monthly allowance, and normal personal use usually stays within it. Anything beyond it is billed to your card.</p>',
 
       '<div class="pm-need"><b>You will need:</b><br>',
       '• A Google account (your Gmail login works)<br>',
@@ -323,9 +323,9 @@ module.exports = [
       '<div class="body">Tap the <b>Google Maps key</b> box (with these steps), paste your key, then tap <b>Save settings</b> at the bottom. ',
       'A map preview appears when the key works, and your watch will say <b>"Your Google key works!"</b></div></details>',
 
-      '<div class="pm-free"><b>What\'s free?</b> Google offers free monthly allowances for eligible services. ',
-      'Usage depends on your trips, searches and the services requested. Check Google\'s current pricing; free allowances vary by service.</div>',
-      '<div class="pm-hide-row"><button type="button" class="pm-hide">Hide instructions</button></div>',
+      '<div class="pm-free"><b>What\'s free?</b> Each month Google includes about 10,000 map pictures and 5,000 searches at no charge; a few extras (like opening hours, reviews and photos) have smaller allowances. ',
+      'A typical trip uses around 10 requests. Economical mode in Settings cuts background requests further.</div>',
+'<div class="pm-hide-row"><button type="button" class="pm-hide">Hide instructions</button></div>',
       '</div></div>'
     ].join(''),
     manipulator: staticManipulator(),

@@ -257,8 +257,9 @@ Navigator.prototype.update = function (pos, accuracy, timestamp) {
   var now = Date.now();
   var r = this.route;
   var fixTime = timestamp === undefined ? now : timestamp;
-  var maxAccuracy = r.mode === P.MODE.DRIVE ? 100 : 60;
-  if (!isFinite(accuracy) || accuracy <= 0 || accuracy > maxAccuracy ||
+  // only throw away fixes that are badly off (city GPS is often 30-80 m); arrival needs a better one
+  if (!isFinite(accuracy) || accuracy <= 0) accuracy = 50;
+  if (accuracy > 250 ||
       now - fixTime > 20000 || fixTime > now + 5000 || fixTime < this.lastFix) {
     this.offCount = 0;
     this.noGps('GPS signal weak…');
@@ -296,7 +297,7 @@ Navigator.prototype.update = function (pos, accuracy, timestamp) {
   var toEnd = r.total - snap.s;
   var destDist = r.dest ? geo.haversine(pos, [r.dest.lat, r.dest.lng]) : toEnd;
   var arrivalRadius = r.mode === P.MODE.DRIVE ? 30 : 15;
-  if (accuracy <= arrivalRadius &&
+  if (accuracy <= (r.mode === P.MODE.DRIVE ? 75 : 50) &&
       ((toEnd < (r.mode === P.MODE.DRIVE ? 35 : 18) && snap.off < 60) || destDist < arrivalRadius)) {
     this.arrived = true;
     this.send({
